@@ -12,9 +12,35 @@
 //   app    → relay → the device
 
 const http = require('http');
+const fs = require('fs');
+const path = require('path');
 const { WebSocketServer } = require('ws');
 
 const PORT = process.env.PORT || 8080;
+
+// Static file serving — Flutter web build
+const STATIC_DIR = process.env.STATIC_DIR
+  || path.join(__dirname, '..', 'TeenCommander', 'build', 'web');
+
+const MIME_TYPES = {
+  '.html': 'text/html',
+  '.js':   'text/javascript',
+  '.mjs':  'text/javascript',
+  '.wasm': 'application/wasm',
+  '.json': 'application/json',
+  '.css':  'text/css',
+  '.png':  'image/png',
+  '.jpg':  'image/jpeg',
+  '.ico':  'image/x-icon',
+  '.svg':  'image/svg+xml',
+  '.ttf':  'font/ttf',
+  '.otf':  'font/otf',
+  '.woff': 'font/woff',
+  '.woff2':'font/woff2',
+  '.mp3':  'audio/mpeg',
+  '.wav':  'audio/wav',
+  '.sf2':  'application/octet-stream',
+};
 
 // In-memory registry (no database needed)
 // deviceId → { ws, connectedAt, lastMessageAt }
@@ -53,9 +79,50 @@ const httpServer = http.createServer((req, res) => {
     return;
   }
 
-  // Default response
-  res.writeHead(200, { 'Content-Type': 'text/plain' });
-  res.end('TeenPot Relay v1.0.0');
+  // Static files — serve Flutter web build
+  let urlPath = new URL(req.url, `http://${req.headers.host}`).pathname;
+  if (urlPath === '/') urlPath = '/index.html';
+
+  const filePath = path.join(STATIC_DIR, urlPath);
+  const ext = path.extname(filePath).toLowerCase();
+
+  // Security: no path traversal
+  if (!filePath.startsWith(STATIC_DIR)) {
+    res.writeHead(403);
+    res.end('Forbidden');
+    return;
+  }
+
+  fs.stat(filePath, (err, stat) => {
+    if (err || !stat.isFile()) {
+      // SPA fallback: serve index.html for unknown routes
+      const indexPath = path.join(STATIC_DIR, 'index.html');
+      fs.readFile(indexPath, (e2, data) => {
+        if (e2) {
+          res.writeHead(200, { 'Content-Type': 'text/plain' });
+          res.end('TeenPot Relay v1.0.0');
+          return;
+        }
+        res.writeHead(200, {
+          'Content-Type': 'text/html',
+          'Cache-Control': 'no-cache',
+          'Access-Control-Allow-Origin': '*',
+        });
+        res.end(data);
+      });
+      return;
+    }
+
+    const contentType = MIME_TYPES[ext] || 'application/octet-stream';
+    res.writeHead(200, {
+      'Content-Type': contentType,
+      'Content-Length': stat.size,
+      'Cache-Control': 'no-cache, no-store, must-revalidate',
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Methods': 'GET, OPTIONS',
+    });
+    fs.createReadStream(filePath).pipe(res);
+  });
 });
 
 // WebSocket server (noServer mode — we handle upgrade routing ourselves)
@@ -124,6 +191,14 @@ function handleDeviceConnection(ws, deviceId) {
     const info = devices.get(deviceId);
     if (info) info.lastMessageAt = new Date().toISOString();
 
+    // Log SF2-related messages
+    if (!isBinary) {
+      const str = data.toString();
+      if (str.includes('sf2') || str.includes('system_info') || str.includes('upload')) {
+        console.log(`[dev→app] ${deviceId} text: ${str.slice(0, 200)}`);
+      }
+    }
+
     const watchers = appClients.get(deviceId);
     if (!watchers || watchers.size === 0) return;
 
@@ -179,9 +254,17 @@ function handleAppConnection(ws, deviceId) {
 
   // Forward app messages to the device (text commands + binary SF2 chunks)
   ws.on('message', (data, isBinary) => {
+    if (isBinary) {
+      console.log(`[app→dev] ${deviceId} binary ${data.length} bytes`);
+    } else {
+      const str = data.toString().slice(0, 120);
+      console.log(`[app→dev] ${deviceId} text: ${str}`);
+    }
     const device = devices.get(deviceId);
     if (device) {
       safeSend(device.ws, data, isBinary);
+    } else {
+      console.log(`[app→dev] ${deviceId} DROPPED — device not connected!`);
     }
   });
 
