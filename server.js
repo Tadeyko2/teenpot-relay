@@ -59,7 +59,8 @@ const httpServer = http.createServer((req, res) => {
 });
 
 // WebSocket server (noServer mode — we handle upgrade routing ourselves)
-const wss = new WebSocketServer({ noServer: true, maxPayload: 4096 });
+// 16 MB max payload to support SF2 upload chunks (8KB each) + control messages
+const wss = new WebSocketServer({ noServer: true, maxPayload: 16 * 1024 * 1024 });
 
 httpServer.on('upgrade', (request, socket, head) => {
   const pathname = new URL(request.url, `http://${request.headers.host}`).pathname;
@@ -118,17 +119,16 @@ function handleDeviceConnection(ws, deviceId) {
   ws.isAlive = true;
   ws.on('pong', () => { ws.isAlive = true; });
 
-  // Forward device messages to all watching apps
-  ws.on('message', (data) => {
+  // Forward device messages to all watching apps (text + binary)
+  ws.on('message', (data, isBinary) => {
     const info = devices.get(deviceId);
     if (info) info.lastMessageAt = new Date().toISOString();
 
     const watchers = appClients.get(deviceId);
     if (!watchers || watchers.size === 0) return;
 
-    const msg = data.toString();
     for (const appWs of watchers) {
-      safeSend(appWs, msg);
+      safeSend(appWs, data, isBinary);
     }
   });
 
@@ -177,11 +177,11 @@ function handleAppConnection(ws, deviceId) {
   ws.isAlive = true;
   ws.on('pong', () => { ws.isAlive = true; });
 
-  // Forward app messages to the device (future: remote commands)
-  ws.on('message', (data) => {
+  // Forward app messages to the device (text commands + binary SF2 chunks)
+  ws.on('message', (data, isBinary) => {
     const device = devices.get(deviceId);
     if (device) {
-      safeSend(device.ws, data.toString());
+      safeSend(device.ws, data, isBinary);
     }
   });
 
@@ -201,11 +201,11 @@ function handleAppConnection(ws, deviceId) {
   });
 }
 
-// Safe send — catches errors on dead sockets
-function safeSend(ws, msg) {
+// Safe send — catches errors on dead sockets (supports text + binary)
+function safeSend(ws, data, isBinary) {
   try {
     if (ws.readyState === ws.OPEN) {
-      ws.send(msg);
+      ws.send(data, { binary: !!isBinary });
     }
   } catch (_) {}
 }
