@@ -20,7 +20,7 @@ const PORT = process.env.PORT || 8080;
 
 // Static file serving — Flutter web build
 const STATIC_DIR = process.env.STATIC_DIR
-  || path.join(__dirname, '..', 'TeenCommander', 'build', 'web');
+  || path.join(__dirname, 'public');
 
 const MIME_TYPES = {
   '.html': 'text/html',
