@@ -1,36 +1,38 @@
 // Web Audio API bridge for TeenPot Synth
 // AudioWorklet (preferred) with ScriptProcessorNode fallback
-// AudioWorklet runs on a separate thread — immune to main thread stalls
 
 var SynthBridge = {
   audioCtx: null,
   workletNode: null,
-  processor: null,        // ScriptProcessor fallback
-  ringBuffer: null,        // only used in fallback mode
+  processor: null,
+  ringBuffer: null,
   readIndex: 0,
   writeIndex: 0,
   bufferSize: 8192,
   isRunning: false,
   useWorklet: false,
-  _resumeInstalled: false,
 
-  // Track how many samples we've fed vs how many have been consumed
   totalFed: 0,
   startTime: 0,
 
-  // Call SYNCHRONOUSLY from a user gesture handler (onPointerDown).
-  // Creates AudioContext + resumes it while we still have user-activation.
-  // Must happen before any async call (await / Promise) breaks the gesture chain.
   warmup: function() {
     if (!this.audioCtx) {
-      var AudioCtx = window.AudioContext || window.webkitAudioContext;
-      if (!AudioCtx) return;
-      this.audioCtx = new AudioCtx();
+      var AC = window.AudioContext || window.webkitAudioContext;
+      if (!AC) return;
+      this.audioCtx = new AC();
       console.log('[SynthBridge] warmup: created AudioContext, state:', this.audioCtx.state);
     }
     if (this.audioCtx.state === 'suspended') {
       this.audioCtx.resume();
-      console.log('[SynthBridge] warmup: resume() called in gesture context');
+      // iOS unlock: play a tiny silent buffer
+      try {
+        var buf = this.audioCtx.createBuffer(1, 1, 22050);
+        var src = this.audioCtx.createBufferSource();
+        src.buffer = buf;
+        src.connect(this.audioCtx.destination);
+        src.start(0);
+      } catch(e) {}
+      console.log('[SynthBridge] warmup: resume + silent buffer in gesture context');
     }
   },
 
@@ -38,43 +40,26 @@ var SynthBridge = {
     if (this.isRunning) return Promise.resolve(true);
     var self = this;
 
-    // If warmup() wasn't called, create now (won't resume on mobile though)
     if (!this.audioCtx) {
       try {
-        var AudioCtx = window.AudioContext || window.webkitAudioContext;
-        if (!AudioCtx) {
-          console.error('[SynthBridge] No AudioContext support');
-          return Promise.resolve(false);
-        }
-        this.audioCtx = new AudioCtx();
-        console.log('[SynthBridge] AudioContext created in start(), state:', this.audioCtx.state);
+        var AC = window.AudioContext || window.webkitAudioContext;
+        if (!AC) return Promise.resolve(false);
+        this.audioCtx = new AC();
       } catch(e) {
         console.error('[SynthBridge] AudioContext creation failed:', e);
         return Promise.resolve(false);
       }
     }
 
-    // Install resume-on-gesture handlers
-    if (!this._resumeInstalled) {
-      this._installResumeHandlers();
-      this._resumeInstalled = true;
-    }
+    console.log('[SynthBridge] start: state:', this.audioCtx.state);
 
-    console.log('[SynthBridge] start: AudioContext state:', this.audioCtx.state);
-
-    // Try resume (may already be running from warmup)
     var resumePromise;
     if (this.audioCtx.state === 'suspended') {
-      resumePromise = this.audioCtx.resume().then(function() {
-        console.log('[SynthBridge] AudioContext resumed in start(), state:', self.audioCtx.state);
-      }).catch(function(e) {
-        console.warn('[SynthBridge] Resume in start() failed:', e);
-      });
+      resumePromise = this.audioCtx.resume().catch(function() {});
     } else {
       resumePromise = Promise.resolve();
     }
 
-    // Load AudioWorklet or fallback
     return resumePromise.then(function() {
       if (self.audioCtx.audioWorklet) {
         return self.audioCtx.audioWorklet.addModule('synth_worklet.js').then(function() {
@@ -87,7 +72,7 @@ var SynthBridge = {
           console.log('[SynthBridge] started with AudioWorklet, sampleRate:', self.audioCtx.sampleRate);
           return true;
         }).catch(function(e) {
-          console.warn('[SynthBridge] AudioWorklet failed, falling back to ScriptProcessor:', e);
+          console.warn('[SynthBridge] AudioWorklet failed, fallback:', e);
           return self._startScriptProcessor();
         });
       } else {
@@ -96,49 +81,17 @@ var SynthBridge = {
     });
   },
 
-  _installResumeHandlers: function() {
-    var self = this;
-    var doResume = function() {
-      if (self.audioCtx && self.audioCtx.state === 'suspended') {
-        self.audioCtx.resume().then(function() {
-          console.log('[SynthBridge] AudioContext resumed via user gesture, state:', self.audioCtx.state);
-        }).catch(function() {});
-      }
-    };
-
-    // Listen on document (bubbles up from all elements)
-    var events = ['touchstart', 'touchend', 'click', 'pointerdown', 'pointerup', 'mousedown', 'keydown'];
-    events.forEach(function(evt) {
-      document.addEventListener(evt, doResume, { capture: true, passive: true });
-    });
-
-    // Also listen directly on Flutter's host element and any flt-glass-pane
-    var tryFlutterElements = function() {
-      var targets = document.querySelectorAll('flt-glass-pane, flutter-view, flt-semantics-host, canvas');
-      targets.forEach(function(el) {
-        events.forEach(function(evt) {
-          el.addEventListener(evt, doResume, { capture: true, passive: true });
-        });
-      });
-      if (targets.length > 0) {
-        console.log('[SynthBridge] Attached resume handlers to', targets.length, 'Flutter elements');
-      }
-    };
-    // Try now and again after short delay (Flutter may not have rendered yet)
-    tryFlutterElements();
-    setTimeout(tryFlutterElements, 1000);
-    setTimeout(tryFlutterElements, 3000);
-  },
-
-  // Called from Flutter on any user interaction — guaranteed user gesture context
   tryResume: function() {
     if (this.audioCtx && this.audioCtx.state === 'suspended') {
-      var self = this;
-      this.audioCtx.resume().then(function() {
-        console.log('[SynthBridge] AudioContext resumed via tryResume, state:', self.audioCtx.state);
-      }).catch(function(e) {
-        console.warn('[SynthBridge] tryResume failed:', e);
-      });
+      this.audioCtx.resume().catch(function() {});
+      // iOS silent buffer trick
+      try {
+        var buf = this.audioCtx.createBuffer(1, 1, 22050);
+        var src = this.audioCtx.createBufferSource();
+        src.buffer = buf;
+        src.connect(this.audioCtx.destination);
+        src.start(0);
+      } catch(e) {}
       return false;
     }
     return this.audioCtx ? this.audioCtx.state === 'running' : false;
@@ -149,10 +102,8 @@ var SynthBridge = {
       this.ringBuffer = new Float32Array(this.bufferSize);
       this.readIndex = 0;
       this.writeIndex = 0;
-
       this.processor = this.audioCtx.createScriptProcessor(1024, 0, 1);
       this.processor.connect(this.audioCtx.destination);
-
       var self = this;
       this.processor.onaudioprocess = function(e) {
         var output = e.outputBuffer.getChannelData(0);
@@ -162,24 +113,21 @@ var SynthBridge = {
           self.readIndex = (self.readIndex + 1) % self.bufferSize;
         }
       };
-
       this.useWorklet = false;
       this.isRunning = true;
-      console.log('[SynthBridge] started with ScriptProcessor (fallback), sampleRate:', this.audioCtx.sampleRate);
+      console.log('[SynthBridge] started with ScriptProcessor, sampleRate:', this.audioCtx.sampleRate);
       return true;
     } catch(e) {
-      console.error('[SynthBridge] ScriptProcessor start error:', e);
+      console.error('[SynthBridge] ScriptProcessor error:', e);
       return false;
     }
   },
 
   getBuffered: function() {
     if (this.useWorklet) {
-      // Estimate: total fed minus total consumed by audio context
       var elapsed = this.audioCtx.currentTime - this.startTime;
       var consumed = Math.floor(elapsed * this.audioCtx.sampleRate);
-      var buffered = this.totalFed - consumed;
-      return Math.max(0, buffered);
+      return Math.max(0, this.totalFed - consumed);
     } else {
       var b = this.writeIndex - this.readIndex;
       if (b < 0) b += this.bufferSize;
@@ -189,9 +137,7 @@ var SynthBridge = {
 
   feed: function(samples) {
     if (!this.isRunning) return;
-
     if (this.useWorklet) {
-      // Send samples to worklet thread via port
       this.workletNode.port.postMessage(samples);
       this.totalFed += samples.length;
     } else {
@@ -204,21 +150,11 @@ var SynthBridge = {
   },
 
   stop: function() {
-    if (this.workletNode) {
-      this.workletNode.disconnect();
-      this.workletNode = null;
-    }
-    if (this.processor) {
-      this.processor.disconnect();
-      this.processor = null;
-    }
-    if (this.audioCtx) {
-      this.audioCtx.close();
-      this.audioCtx = null;
-    }
+    if (this.workletNode) { this.workletNode.disconnect(); this.workletNode = null; }
+    if (this.processor) { this.processor.disconnect(); this.processor = null; }
+    if (this.audioCtx) { this.audioCtx.close(); this.audioCtx = null; }
     this.isRunning = false;
     this.useWorklet = false;
-    console.log('[SynthBridge] stopped');
   },
 
   getSampleRate: function() {
@@ -229,38 +165,52 @@ var SynthBridge = {
     return this.audioCtx ? this.audioCtx.state : 'closed';
   },
 
-  // Probe an IP for TeenPot identity with proper AbortController timeout.
   probeTeenPot: function(url, timeoutMs) {
-    console.log('[SynthBridge] probeTeenPot:', url, 'timeout:', timeoutMs);
     var controller = new AbortController();
     var timer = setTimeout(function() { controller.abort(); }, timeoutMs);
     return fetch(url, { signal: controller.signal, mode: 'cors' })
-      .then(function(r) {
-        clearTimeout(timer);
-        console.log('[SynthBridge] probe response:', url, 'ok:', r.ok, 'status:', r.status);
-        if (!r.ok) return '';
-        return r.text();
-      })
-      .then(function(text) {
-        if (text) console.log('[SynthBridge] probe body:', url, text.substring(0, 100));
-        return text || '';
-      })
-      .catch(function(e) {
-        clearTimeout(timer);
-        return '';
-      });
+      .then(function(r) { clearTimeout(timer); if (!r.ok) return ''; return r.text(); })
+      .then(function(t) { return t || ''; })
+      .catch(function() { clearTimeout(timer); return ''; });
   },
 
   downloadBlob: function(uint8Array, filename) {
     var blob = new Blob([uint8Array], { type: 'application/octet-stream' });
     var url = URL.createObjectURL(blob);
     var a = document.createElement('a');
-    a.href = url;
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
+    a.href = url; a.download = filename;
+    document.body.appendChild(a); a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
-    console.log('[SynthBridge] downloaded:', filename, uint8Array.length, 'bytes');
   }
 };
+
+// === AUTO-UNLOCK: Native DOM handler fires BEFORE Flutter's event pipeline ===
+// This is the only reliable way to unlock AudioContext on iOS Safari.
+(function() {
+  function unlock() {
+    if (!SynthBridge.audioCtx) {
+      var AC = window.AudioContext || window.webkitAudioContext;
+      if (AC) {
+        SynthBridge.audioCtx = new AC();
+        console.log('[AutoUnlock] Created AudioContext, state:', SynthBridge.audioCtx.state);
+      }
+    }
+    if (SynthBridge.audioCtx && SynthBridge.audioCtx.state === 'suspended') {
+      SynthBridge.audioCtx.resume();
+      // Play silent buffer — iOS requires actual audio output to fully unlock
+      try {
+        var buf = SynthBridge.audioCtx.createBuffer(1, 1, 22050);
+        var src = SynthBridge.audioCtx.createBufferSource();
+        src.buffer = buf;
+        src.connect(SynthBridge.audioCtx.destination);
+        src.start(0);
+      } catch(e) {}
+      console.log('[AutoUnlock] resume + silent buffer played');
+    }
+  }
+  // Capture phase = fires before Flutter can intercept
+  ['touchstart', 'touchend', 'mousedown', 'click', 'pointerdown', 'keydown'].forEach(function(evt) {
+    document.addEventListener(evt, unlock, { capture: true, passive: true });
+  });
+})();
