@@ -189,9 +189,9 @@ var SynthBridge = {
 
   feed: function(samples) {
     if (!this.isRunning) return;
+    this.totalFed += samples.length;
     if (this.useWorklet) {
       this.workletNode.port.postMessage(samples);
-      this.totalFed += samples.length;
     } else {
       if (!this.ringBuffer) return;
       for (var i = 0; i < samples.length; i++) {
