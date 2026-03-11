@@ -1,5 +1,5 @@
 // Web Audio API bridge for TeenPot Synth
-// AudioWorklet (preferred) with ScriptProcessorNode fallback
+// ScriptProcessor on mobile (reliable), AudioWorklet on desktop (preferred)
 
 var SynthBridge = {
   audioCtx: null,
@@ -15,6 +15,9 @@ var SynthBridge = {
   totalFed: 0,
   startTime: 0,
 
+  // Detect mobile browsers — force ScriptProcessor (AudioWorklet postMessage unreliable)
+  _isMobile: /iPhone|iPad|iPod|Android|webOS|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent),
+
   warmup: function() {
     if (!this.audioCtx) {
       var AC = window.AudioContext || window.webkitAudioContext;
@@ -24,7 +27,6 @@ var SynthBridge = {
     }
     if (this.audioCtx.state === 'suspended') {
       this.audioCtx.resume();
-      // iOS unlock: play a tiny silent buffer
       try {
         var buf = this.audioCtx.createBuffer(1, 1, 22050);
         var src = this.audioCtx.createBufferSource();
@@ -51,7 +53,7 @@ var SynthBridge = {
       }
     }
 
-    console.log('[SynthBridge] start: state:', this.audioCtx.state, 'sampleRate:', this.audioCtx.sampleRate);
+    console.log('[SynthBridge] start: state:', this.audioCtx.state, 'sampleRate:', this.audioCtx.sampleRate, 'mobile:', this._isMobile);
 
     var resumePromise;
     if (this.audioCtx.state === 'suspended') {
@@ -63,7 +65,13 @@ var SynthBridge = {
     return resumePromise.then(function() {
       console.log('[SynthBridge] after resume: state:', self.audioCtx.state);
 
-      // Try AudioWorklet with 3s timeout — addModule can hang on some mobile browsers
+      // Mobile: always use ScriptProcessor — AudioWorklet postMessage is unreliable
+      if (self._isMobile) {
+        console.log('[SynthBridge] Mobile detected — using ScriptProcessor (skipping AudioWorklet)');
+        return self._startScriptProcessor();
+      }
+
+      // Desktop: try AudioWorklet with 3s timeout
       if (self.audioCtx.audioWorklet) {
         var workletLoaded = self.audioCtx.audioWorklet.addModule('synth_worklet.js');
         var timeout = new Promise(function(_, reject) {
@@ -78,14 +86,12 @@ var SynthBridge = {
           self.startTime = self.audioCtx.currentTime;
           self.isRunning = true;
           console.log('[SynthBridge] started with AudioWorklet');
-          self._diagnosticBeep();
           return true;
         }).catch(function(e) {
           console.warn('[SynthBridge] AudioWorklet failed:', e.message, '— falling back to ScriptProcessor');
           return self._startScriptProcessor();
         });
       } else {
-        console.log('[SynthBridge] No audioWorklet API, using ScriptProcessor');
         return self._startScriptProcessor();
       }
     });
@@ -94,7 +100,6 @@ var SynthBridge = {
   tryResume: function() {
     if (this.audioCtx && this.audioCtx.state === 'suspended') {
       this.audioCtx.resume().catch(function() {});
-      // iOS silent buffer trick
       try {
         var buf = this.audioCtx.createBuffer(1, 1, 22050);
         var src = this.audioCtx.createBufferSource();
@@ -125,32 +130,11 @@ var SynthBridge = {
       };
       this.useWorklet = false;
       this.isRunning = true;
-      console.log('[SynthBridge] started with ScriptProcessor');
-      this._diagnosticBeep();
+      console.log('[SynthBridge] started with ScriptProcessor, sampleRate:', this.audioCtx.sampleRate);
       return true;
     } catch(e) {
       console.error('[SynthBridge] ScriptProcessor error:', e);
       return false;
-    }
-  },
-
-  // Short quiet beep to verify audio pipeline works on this device
-  _diagnosticBeep: function() {
-    try {
-      var osc = this.audioCtx.createOscillator();
-      var gain = this.audioCtx.createGain();
-      osc.type = 'sine';
-      osc.frequency.value = 880;
-      gain.gain.value = 0.15;
-      osc.connect(gain);
-      gain.connect(this.audioCtx.destination);
-      var t = this.audioCtx.currentTime;
-      osc.start(t);
-      gain.gain.exponentialRampToValueAtTime(0.001, t + 0.12);
-      osc.stop(t + 0.15);
-      console.log('[SynthBridge] diagnostic beep played, state:', this.audioCtx.state);
-    } catch(e) {
-      console.error('[SynthBridge] diagnostic beep failed:', e);
     }
   },
 
@@ -185,6 +169,7 @@ var SynthBridge = {
       sampleRate: this.audioCtx ? this.audioCtx.sampleRate : 0,
       isRunning: this.isRunning,
       useWorklet: this.useWorklet,
+      mobile: this._isMobile,
       buffered: this.isRunning ? this.getBuffered() : 0,
       totalFed: this.totalFed
     });
@@ -252,33 +237,9 @@ var SynthBridge = {
   }
 };
 
-// === iOS MUTE SWITCH BYPASS ===
-// On iOS Safari, the hardware mute switch silences Web Audio ("ambient" session).
-// Playing through an HTML5 <audio> element forces "playback" session category,
-// which ignores the mute switch. We create a silent looping audio element.
+// === AUTO-UNLOCK: Native DOM handler fires BEFORE Flutter's event pipeline ===
 (function() {
-  var silentAudio = null;
-
-  function ensureSilentAudio() {
-    if (silentAudio) return;
-    // Tiny silent WAV: 1 sample, 8kHz, mono, 8-bit
-    silentAudio = document.createElement('audio');
-    silentAudio.setAttribute('playsinline', '');
-    silentAudio.setAttribute('webkit-playsinline', '');
-    silentAudio.loop = true;
-    // Base64-encoded minimal WAV (44 bytes header + 1 byte of silence)
-    silentAudio.src = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAESsAAABAAgAZGF0YQAAAAA=';
-    silentAudio.volume = 0.01;
-    silentAudio.load();
-  }
-
   function unlock() {
-    // Force playback session via HTML5 audio (bypasses iOS mute switch)
-    ensureSilentAudio();
-    if (silentAudio.paused) {
-      silentAudio.play().catch(function() {});
-    }
-
     if (!SynthBridge.audioCtx) {
       var AC = window.AudioContext || window.webkitAudioContext;
       if (AC) {
@@ -288,7 +249,6 @@ var SynthBridge = {
     }
     if (SynthBridge.audioCtx && SynthBridge.audioCtx.state === 'suspended') {
       SynthBridge.audioCtx.resume();
-      // Play silent buffer via Web Audio too
       try {
         var buf = SynthBridge.audioCtx.createBuffer(1, 1, 22050);
         var src = SynthBridge.audioCtx.createBufferSource();
@@ -296,10 +256,9 @@ var SynthBridge = {
         src.connect(SynthBridge.audioCtx.destination);
         src.start(0);
       } catch(e) {}
-      console.log('[AutoUnlock] resume + silent buffer + HTML5 audio played');
+      console.log('[AutoUnlock] resume + silent buffer played');
     }
   }
-  // Capture phase = fires before Flutter can intercept
   ['touchstart', 'touchend', 'mousedown', 'click', 'pointerdown', 'keydown'].forEach(function(evt) {
     document.addEventListener(evt, unlock, { capture: true, passive: true });
   });
