@@ -237,9 +237,57 @@ var SynthBridge = {
   }
 };
 
-// === AUTO-UNLOCK: Native DOM handler fires BEFORE Flutter's event pipeline ===
+// === iOS AUDIO SESSION FIX ===
+// On iOS, Web Audio uses "ambient" session which respects the mute switch.
+// HTML5 <audio> uses "playback" session which ignores the mute switch.
+// By playing a silent <audio> element first, we force the entire audio session
+// to "playback" mode, making Web Audio also ignore the mute switch.
+// This is required because iOS users commonly have the mute switch on.
 (function() {
+  var silentAudio = null;
+  var audioSessionFixed = false;
+
+  function fixAudioSession() {
+    if (audioSessionFixed) return;
+    // Create silent looping <audio> — forces iOS "playback" audio session
+    silentAudio = document.createElement('audio');
+    silentAudio.setAttribute('playsinline', '');
+    silentAudio.setAttribute('webkit-playsinline', '');
+    // Generate a tiny WAV in JS — 1 second of silence at 8kHz mono 8-bit
+    var header = new Uint8Array([
+      0x52,0x49,0x46,0x46, // "RIFF"
+      0x24,0x20,0x00,0x00, // file size - 8
+      0x57,0x41,0x56,0x45, // "WAVE"
+      0x66,0x6D,0x74,0x20, // "fmt "
+      0x10,0x00,0x00,0x00, // chunk size 16
+      0x01,0x00,           // PCM format
+      0x01,0x00,           // mono
+      0x40,0x1F,0x00,0x00, // 8000 Hz
+      0x40,0x1F,0x00,0x00, // byte rate
+      0x01,0x00,           // block align
+      0x08,0x00,           // 8 bits per sample
+      0x64,0x61,0x74,0x61, // "data"
+      0x00,0x20,0x00,0x00  // data size = 8192 bytes
+    ]);
+    var silence = new Uint8Array(8192);
+    for (var i = 0; i < 8192; i++) silence[i] = 128; // 128 = silence in 8-bit PCM
+    var wav = new Blob([header, silence], { type: 'audio/wav' });
+    silentAudio.src = URL.createObjectURL(wav);
+    silentAudio.loop = true;
+    silentAudio.volume = 0.01; // near-silent but not zero
+    var playPromise = silentAudio.play();
+    if (playPromise) {
+      playPromise.then(function() {
+        audioSessionFixed = true;
+        console.log('[iOS] Audio session forced to playback mode');
+      }).catch(function() {});
+    }
+  }
+
   function unlock() {
+    // Fix iOS audio session FIRST
+    fixAudioSession();
+
     if (!SynthBridge.audioCtx) {
       var AC = window.AudioContext || window.webkitAudioContext;
       if (AC) {
