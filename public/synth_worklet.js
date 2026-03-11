@@ -3,10 +3,10 @@
 class SynthProcessor extends AudioWorkletProcessor {
   constructor() {
     super();
-    this.buffer = new Float32Array(16384);
+    this.buffer = new Float32Array(32768);
     this.readIdx = 0;
     this.writeIdx = 0;
-    this.size = 16384;
+    this.size = 32768;
     this.lastSample = 0;
 
     this.port.onmessage = (e) => {

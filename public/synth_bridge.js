@@ -8,7 +8,7 @@ var SynthBridge = {
   ringBuffer: null,
   readIndex: 0,
   writeIndex: 0,
-  bufferSize: 8192,
+  bufferSize: 32768,
   isRunning: false,
   useWorklet: false,
 
@@ -102,7 +102,7 @@ var SynthBridge = {
       this.ringBuffer = new Float32Array(this.bufferSize);
       this.readIndex = 0;
       this.writeIndex = 0;
-      this.processor = this.audioCtx.createScriptProcessor(1024, 0, 1);
+      this.processor = this.audioCtx.createScriptProcessor(2048, 0, 1);
       this.processor.connect(this.audioCtx.destination);
       var self = this;
       this.processor.onaudioprocess = function(e) {
