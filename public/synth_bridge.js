@@ -12,6 +12,7 @@ var SynthBridge = {
   bufferSize: 8192,
   isRunning: false,
   useWorklet: false,
+  _resumeInstalled: false,
 
   // Track how many samples we've fed vs how many have been consumed
   totalFed: 0,
@@ -30,44 +31,30 @@ var SynthBridge = {
       this.audioCtx = new AudioCtx();
       console.log('[SynthBridge] AudioContext created, state:', this.audioCtx.state, 'sampleRate:', this.audioCtx.sampleRate);
 
-      // iOS/Mobile: keep trying to resume on any user interaction
-      var ctx = this.audioCtx;
-      var resumeHandler = function() {
-        if (ctx && ctx.state === 'suspended') {
-          ctx.resume().then(function() {
-            console.log('[SynthBridge] AudioContext resumed after user gesture');
-          }).catch(function() {});
-        }
-        if (ctx && ctx.state === 'running') {
-          document.removeEventListener('touchstart', resumeHandler);
-          document.removeEventListener('click', resumeHandler);
-          document.removeEventListener('pointerdown', resumeHandler);
-        }
-      };
-      document.addEventListener('touchstart', resumeHandler, { once: false, passive: true });
-      document.addEventListener('click', resumeHandler, { once: false, passive: true });
-      document.addEventListener('pointerdown', resumeHandler, { once: false, passive: true });
+      // Install resume-on-gesture on many targets (Flutter canvas, document, body)
+      if (!this._resumeInstalled) {
+        this._installResumeHandlers();
+        this._resumeInstalled = true;
+      }
     } catch(e) {
       console.error('[SynthBridge] AudioContext creation failed:', e);
       return Promise.resolve(false);
     }
 
-    // Ensure AudioContext is running before loading worklet
+    // Try to resume — on mobile this will likely fail without gesture
     var resumePromise;
     if (this.audioCtx.state === 'suspended') {
       console.log('[SynthBridge] AudioContext suspended, attempting resume...');
       resumePromise = this.audioCtx.resume().then(function() {
         console.log('[SynthBridge] AudioContext resumed, state:', self.audioCtx.state);
       }).catch(function(e) {
-        // On mobile, resume may fail until user gesture — continue anyway,
-        // the resumeHandler above will retry on touch/click
         console.warn('[SynthBridge] Resume failed (will retry on gesture):', e);
       });
     } else {
       resumePromise = Promise.resolve();
     }
 
-    // Try AudioWorklet first (supported in Safari 14.1+)
+    // Load AudioWorklet or fallback
     return resumePromise.then(function() {
       if (self.audioCtx.audioWorklet) {
         return self.audioCtx.audioWorklet.addModule('synth_worklet.js').then(function() {
@@ -87,6 +74,54 @@ var SynthBridge = {
         return self._startScriptProcessor();
       }
     });
+  },
+
+  _installResumeHandlers: function() {
+    var self = this;
+    var doResume = function() {
+      if (self.audioCtx && self.audioCtx.state === 'suspended') {
+        self.audioCtx.resume().then(function() {
+          console.log('[SynthBridge] AudioContext resumed via user gesture, state:', self.audioCtx.state);
+        }).catch(function() {});
+      }
+    };
+
+    // Listen on document (bubbles up from all elements)
+    var events = ['touchstart', 'touchend', 'click', 'pointerdown', 'pointerup', 'mousedown', 'keydown'];
+    events.forEach(function(evt) {
+      document.addEventListener(evt, doResume, { capture: true, passive: true });
+    });
+
+    // Also listen directly on Flutter's host element and any flt-glass-pane
+    var tryFlutterElements = function() {
+      var targets = document.querySelectorAll('flt-glass-pane, flutter-view, flt-semantics-host, canvas');
+      targets.forEach(function(el) {
+        events.forEach(function(evt) {
+          el.addEventListener(evt, doResume, { capture: true, passive: true });
+        });
+      });
+      if (targets.length > 0) {
+        console.log('[SynthBridge] Attached resume handlers to', targets.length, 'Flutter elements');
+      }
+    };
+    // Try now and again after short delay (Flutter may not have rendered yet)
+    tryFlutterElements();
+    setTimeout(tryFlutterElements, 1000);
+    setTimeout(tryFlutterElements, 3000);
+  },
+
+  // Called from Flutter on any user interaction — guaranteed user gesture context
+  tryResume: function() {
+    if (this.audioCtx && this.audioCtx.state === 'suspended') {
+      var self = this;
+      this.audioCtx.resume().then(function() {
+        console.log('[SynthBridge] AudioContext resumed via tryResume, state:', self.audioCtx.state);
+      }).catch(function(e) {
+        console.warn('[SynthBridge] tryResume failed:', e);
+      });
+      return false;
+    }
+    return this.audioCtx ? this.audioCtx.state === 'running' : false;
   },
 
   _startScriptProcessor: function() {
@@ -170,10 +205,11 @@ var SynthBridge = {
     return this.audioCtx ? this.audioCtx.sampleRate : 44100;
   },
 
+  getState: function() {
+    return this.audioCtx ? this.audioCtx.state : 'closed';
+  },
+
   // Probe an IP for TeenPot identity with proper AbortController timeout.
-  // Returns JSON string on success, empty string on failure.
-  // AbortController actually cancels the TCP connection (unlike Dart timeout).
-  // NOTE: Discovery now uses package:web directly, but this is kept as utility.
   probeTeenPot: function(url, timeoutMs) {
     console.log('[SynthBridge] probeTeenPot:', url, 'timeout:', timeoutMs);
     var controller = new AbortController();
