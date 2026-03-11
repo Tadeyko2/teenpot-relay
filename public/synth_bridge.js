@@ -252,10 +252,33 @@ var SynthBridge = {
   }
 };
 
-// === AUTO-UNLOCK: Native DOM handler fires BEFORE Flutter's event pipeline ===
-// This is the only reliable way to unlock AudioContext on iOS Safari.
+// === iOS MUTE SWITCH BYPASS ===
+// On iOS Safari, the hardware mute switch silences Web Audio ("ambient" session).
+// Playing through an HTML5 <audio> element forces "playback" session category,
+// which ignores the mute switch. We create a silent looping audio element.
 (function() {
+  var silentAudio = null;
+
+  function ensureSilentAudio() {
+    if (silentAudio) return;
+    // Tiny silent WAV: 1 sample, 8kHz, mono, 8-bit
+    silentAudio = document.createElement('audio');
+    silentAudio.setAttribute('playsinline', '');
+    silentAudio.setAttribute('webkit-playsinline', '');
+    silentAudio.loop = true;
+    // Base64-encoded minimal WAV (44 bytes header + 1 byte of silence)
+    silentAudio.src = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAESsAAABAAgAZGF0YQAAAAA=';
+    silentAudio.volume = 0.01;
+    silentAudio.load();
+  }
+
   function unlock() {
+    // Force playback session via HTML5 audio (bypasses iOS mute switch)
+    ensureSilentAudio();
+    if (silentAudio.paused) {
+      silentAudio.play().catch(function() {});
+    }
+
     if (!SynthBridge.audioCtx) {
       var AC = window.AudioContext || window.webkitAudioContext;
       if (AC) {
@@ -265,7 +288,7 @@ var SynthBridge = {
     }
     if (SynthBridge.audioCtx && SynthBridge.audioCtx.state === 'suspended') {
       SynthBridge.audioCtx.resume();
-      // Play silent buffer — iOS requires actual audio output to fully unlock
+      // Play silent buffer via Web Audio too
       try {
         var buf = SynthBridge.audioCtx.createBuffer(1, 1, 22050);
         var src = SynthBridge.audioCtx.createBufferSource();
@@ -273,7 +296,7 @@ var SynthBridge = {
         src.connect(SynthBridge.audioCtx.destination);
         src.start(0);
       } catch(e) {}
-      console.log('[AutoUnlock] resume + silent buffer played');
+      console.log('[AutoUnlock] resume + silent buffer + HTML5 audio played');
     }
   }
   // Capture phase = fires before Flutter can intercept
