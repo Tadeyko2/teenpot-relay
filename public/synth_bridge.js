@@ -18,37 +18,57 @@ var SynthBridge = {
   totalFed: 0,
   startTime: 0,
 
+  // Call SYNCHRONOUSLY from a user gesture handler (onPointerDown).
+  // Creates AudioContext + resumes it while we still have user-activation.
+  // Must happen before any async call (await / Promise) breaks the gesture chain.
+  warmup: function() {
+    if (!this.audioCtx) {
+      var AudioCtx = window.AudioContext || window.webkitAudioContext;
+      if (!AudioCtx) return;
+      this.audioCtx = new AudioCtx();
+      console.log('[SynthBridge] warmup: created AudioContext, state:', this.audioCtx.state);
+    }
+    if (this.audioCtx.state === 'suspended') {
+      this.audioCtx.resume();
+      console.log('[SynthBridge] warmup: resume() called in gesture context');
+    }
+  },
+
   start: function() {
     if (this.isRunning) return Promise.resolve(true);
     var self = this;
 
-    try {
-      var AudioCtx = window.AudioContext || window.webkitAudioContext;
-      if (!AudioCtx) {
-        console.error('[SynthBridge] No AudioContext support');
+    // If warmup() wasn't called, create now (won't resume on mobile though)
+    if (!this.audioCtx) {
+      try {
+        var AudioCtx = window.AudioContext || window.webkitAudioContext;
+        if (!AudioCtx) {
+          console.error('[SynthBridge] No AudioContext support');
+          return Promise.resolve(false);
+        }
+        this.audioCtx = new AudioCtx();
+        console.log('[SynthBridge] AudioContext created in start(), state:', this.audioCtx.state);
+      } catch(e) {
+        console.error('[SynthBridge] AudioContext creation failed:', e);
         return Promise.resolve(false);
       }
-      this.audioCtx = new AudioCtx();
-      console.log('[SynthBridge] AudioContext created, state:', this.audioCtx.state, 'sampleRate:', this.audioCtx.sampleRate);
-
-      // Install resume-on-gesture on many targets (Flutter canvas, document, body)
-      if (!this._resumeInstalled) {
-        this._installResumeHandlers();
-        this._resumeInstalled = true;
-      }
-    } catch(e) {
-      console.error('[SynthBridge] AudioContext creation failed:', e);
-      return Promise.resolve(false);
     }
 
-    // Try to resume — on mobile this will likely fail without gesture
+    // Install resume-on-gesture handlers
+    if (!this._resumeInstalled) {
+      this._installResumeHandlers();
+      this._resumeInstalled = true;
+    }
+
+    console.log('[SynthBridge] start: AudioContext state:', this.audioCtx.state);
+
+    // Try resume (may already be running from warmup)
     var resumePromise;
     if (this.audioCtx.state === 'suspended') {
-      console.log('[SynthBridge] AudioContext suspended, attempting resume...');
       resumePromise = this.audioCtx.resume().then(function() {
-        console.log('[SynthBridge] AudioContext resumed, state:', self.audioCtx.state);
+        console.log('[SynthBridge] AudioContext resumed in start(), state:', self.audioCtx.state);
       }).catch(function(e) {
-        console.warn('[SynthBridge] Resume failed (will retry on gesture):', e);
+        console.warn('[SynthBridge] Resume in start() failed:', e);
       });
     } else {
       resumePromise = Promise.resolve();
