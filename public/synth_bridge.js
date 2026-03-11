@@ -43,7 +43,7 @@ var SynthBridge = {
     if (!this.audioCtx) {
       try {
         var AC = window.AudioContext || window.webkitAudioContext;
-        if (!AC) return Promise.resolve(false);
+        if (!AC) { console.error('[SynthBridge] No AudioContext API'); return Promise.resolve(false); }
         this.audioCtx = new AC();
       } catch(e) {
         console.error('[SynthBridge] AudioContext creation failed:', e);
@@ -51,7 +51,7 @@ var SynthBridge = {
       }
     }
 
-    console.log('[SynthBridge] start: state:', this.audioCtx.state);
+    console.log('[SynthBridge] start: state:', this.audioCtx.state, 'sampleRate:', this.audioCtx.sampleRate);
 
     var resumePromise;
     if (this.audioCtx.state === 'suspended') {
@@ -61,21 +61,31 @@ var SynthBridge = {
     }
 
     return resumePromise.then(function() {
+      console.log('[SynthBridge] after resume: state:', self.audioCtx.state);
+
+      // Try AudioWorklet with 3s timeout — addModule can hang on some mobile browsers
       if (self.audioCtx.audioWorklet) {
-        return self.audioCtx.audioWorklet.addModule('synth_worklet.js').then(function() {
+        var workletLoaded = self.audioCtx.audioWorklet.addModule('synth_worklet.js');
+        var timeout = new Promise(function(_, reject) {
+          setTimeout(function() { reject(new Error('AudioWorklet addModule timeout (3s)')); }, 3000);
+        });
+
+        return Promise.race([workletLoaded, timeout]).then(function() {
           self.workletNode = new AudioWorkletNode(self.audioCtx, 'synth-processor');
           self.workletNode.connect(self.audioCtx.destination);
           self.useWorklet = true;
           self.totalFed = 0;
           self.startTime = self.audioCtx.currentTime;
           self.isRunning = true;
-          console.log('[SynthBridge] started with AudioWorklet, sampleRate:', self.audioCtx.sampleRate);
+          console.log('[SynthBridge] started with AudioWorklet');
+          self._diagnosticBeep();
           return true;
         }).catch(function(e) {
-          console.warn('[SynthBridge] AudioWorklet failed, fallback:', e);
+          console.warn('[SynthBridge] AudioWorklet failed:', e.message, '— falling back to ScriptProcessor');
           return self._startScriptProcessor();
         });
       } else {
+        console.log('[SynthBridge] No audioWorklet API, using ScriptProcessor');
         return self._startScriptProcessor();
       }
     });
@@ -115,12 +125,69 @@ var SynthBridge = {
       };
       this.useWorklet = false;
       this.isRunning = true;
-      console.log('[SynthBridge] started with ScriptProcessor, sampleRate:', this.audioCtx.sampleRate);
+      console.log('[SynthBridge] started with ScriptProcessor');
+      this._diagnosticBeep();
       return true;
     } catch(e) {
       console.error('[SynthBridge] ScriptProcessor error:', e);
       return false;
     }
+  },
+
+  // Short quiet beep to verify audio pipeline works on this device
+  _diagnosticBeep: function() {
+    try {
+      var osc = this.audioCtx.createOscillator();
+      var gain = this.audioCtx.createGain();
+      osc.type = 'sine';
+      osc.frequency.value = 880;
+      gain.gain.value = 0.15;
+      osc.connect(gain);
+      gain.connect(this.audioCtx.destination);
+      var t = this.audioCtx.currentTime;
+      osc.start(t);
+      gain.gain.exponentialRampToValueAtTime(0.001, t + 0.12);
+      osc.stop(t + 0.15);
+      console.log('[SynthBridge] diagnostic beep played, state:', this.audioCtx.state);
+    } catch(e) {
+      console.error('[SynthBridge] diagnostic beep failed:', e);
+    }
+  },
+
+  // Manual test tone — call from Dart to verify audio on phone
+  testTone: function() {
+    if (!this.audioCtx) return 'no_ctx';
+    if (this.audioCtx.state === 'suspended') {
+      this.audioCtx.resume();
+    }
+    try {
+      var osc = this.audioCtx.createOscillator();
+      var gain = this.audioCtx.createGain();
+      osc.type = 'sine';
+      osc.frequency.value = 440;
+      gain.gain.value = 0.3;
+      osc.connect(gain);
+      gain.connect(this.audioCtx.destination);
+      var t = this.audioCtx.currentTime;
+      osc.start(t);
+      gain.gain.exponentialRampToValueAtTime(0.001, t + 0.4);
+      osc.stop(t + 0.5);
+      return 'played:' + this.audioCtx.state;
+    } catch(e) {
+      return 'error:' + e.message;
+    }
+  },
+
+  getDiagnostics: function() {
+    return JSON.stringify({
+      hasCtx: !!this.audioCtx,
+      state: this.audioCtx ? this.audioCtx.state : 'none',
+      sampleRate: this.audioCtx ? this.audioCtx.sampleRate : 0,
+      isRunning: this.isRunning,
+      useWorklet: this.useWorklet,
+      buffered: this.isRunning ? this.getBuffered() : 0,
+      totalFed: this.totalFed
+    });
   },
 
   getBuffered: function() {
