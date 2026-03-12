@@ -91290,7 +91290,8 @@ a6=t.z
 a7=t.wJ
 b0=t.BJ
 case 17:if(!(e<b3&&!b2.b)){s=18
-break}b=0
+break}b2.a=new A.bl(new A.ap($.ak,a7),b0)
+b=0
 case 19:if(!(b<10&&e<b3)){s=20
 break}a=B.c.bk(e+1024,0,b3)
 b1=e
@@ -91307,11 +91308,9 @@ case 21:s=19
 break
 case 20:s=e<b3?22:23
 break
-case 22:b1=new A.ap($.ak,a7)
-b2.a=new A.bl(b1,b0)
-p=25
+case 22:p=25
 s=28
-return A.J(b1.nl(0,B.jV),$async$mG)
+return A.J(b2.a.a.nl(0,B.jV),$async$mG)
 case 28:a2=c2
 if(a2<0){A.bn().$1("[SF2Upload] Error during upload: "+A.k(b2.c))
 q=!1
