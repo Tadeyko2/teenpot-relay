@@ -415,13 +415,25 @@ function handleAppConnection(ws, deviceId) {
       console.log(`[app→dev] ${deviceId} binary ${data.length} bytes`);
     } else {
       const str = data.toString();
+
+      // Intercept sf2_relay_push — relay pushes stored file to device as binary chunks
+      if (str.includes('"sf2_relay_push"')) {
+        try {
+          const msg = JSON.parse(str);
+          pushSf2ToDevice(ws, deviceId, msg);
+        } catch (e) {
+          console.error(`[relay-push] Parse error:`, e.message);
+          safeSend(ws, JSON.stringify({ t: 'sf2_push_error', msg: e.message }));
+        }
+        return; // Don't forward to device
+      }
+
       if (str.includes('"sf2_chunk"')) {
         if (!ws._chunkCount) ws._chunkCount = 0;
         ws._chunkCount++;
         const device = devices.get(deviceId);
         const buffered = device ? (device.ws.bufferedAmount || 0) : -1;
         const readyState = device ? device.ws.readyState : -1;
-        // Log EVERY chunk for upload debugging
         logUploadEvent({
           dir: 'app→dev', deviceId,
           chunk: ws._chunkCount,
@@ -465,6 +477,146 @@ function handleAppConnection(ws, deviceId) {
     console.error(`[app] ${deviceId} error:`, err.message);
   });
 }
+
+// ============================================================
+// SF2 relay push — relay sends stored file to device as binary chunks
+// Uses ESP32's existing binary upload handler (sf2_upload_start + binary + sf2_upload_end)
+// ============================================================
+
+const PUSH_CHUNK_SIZE = 4096;  // 4KB binary chunks
+const PUSH_CHUNK_DELAY = 30;   // ms between chunks — let ESP32 process
+const PUSH_ACK_BATCH = 20;    // ESP32 sends ACK every 20 chunks
+
+async function pushSf2ToDevice(appWs, deviceId, msg) {
+  const { token, name, size } = msg;
+  const entry = sf2Store.get(token);
+  if (!entry) {
+    safeSend(appWs, JSON.stringify({ t: 'sf2_push_error', msg: 'Token expired or not found' }));
+    return;
+  }
+
+  const device = devices.get(deviceId);
+  if (!device || device.ws.readyState !== device.ws.OPEN) {
+    safeSend(appWs, JSON.stringify({ t: 'sf2_push_error', msg: 'Device not connected' }));
+    return;
+  }
+
+  const devWs = device.ws;
+  const buffer = entry.buffer;
+  const totalSize = buffer.length;
+
+  console.log(`[relay-push] Starting push: ${name} (${totalSize} bytes) to ${deviceId}`);
+  logUploadEvent({ dir: 'relay-push-start', deviceId, filename: name, size: totalSize });
+
+  // Step 1: Send upload_start to device
+  const startMsg = JSON.stringify({ t: 'sf2_upload_start', name, size: totalSize });
+  safeSend(devWs, startMsg);
+
+  // Wait for sf2_upload_ready from device (listen on device messages)
+  const ready = await waitForDeviceMessage(devWs, deviceId, 'sf2_upload_ready', 15000);
+  if (!ready) {
+    console.log(`[relay-push] Device didn't respond with upload_ready`);
+    safeSend(appWs, JSON.stringify({ t: 'sf2_push_error', msg: 'Device not ready (timeout)' }));
+    return;
+  }
+
+  // Step 2: Send binary chunks
+  let offset = 0;
+  let chunkNum = 0;
+  let lastAckOffset = 0;
+
+  while (offset < totalSize) {
+    const end = Math.min(offset + PUSH_CHUNK_SIZE, totalSize);
+    const chunk = buffer.slice(offset, end);
+
+    // Check device still connected
+    if (devWs.readyState !== devWs.OPEN) {
+      console.log(`[relay-push] Device disconnected during push at ${offset}/${totalSize}`);
+      safeSend(appWs, JSON.stringify({ t: 'sf2_push_error', msg: 'Device disconnected during upload' }));
+      return;
+    }
+
+    // Check back-pressure: wait if device WS buffer > 64KB
+    while (devWs.bufferedAmount > 65536) {
+      await sleep(50);
+      if (devWs.readyState !== devWs.OPEN) {
+        safeSend(appWs, JSON.stringify({ t: 'sf2_push_error', msg: 'Device disconnected (backpressure)' }));
+        return;
+      }
+    }
+
+    safeSend(devWs, chunk, true);
+    offset = end;
+    chunkNum++;
+
+    // Report progress to app every 20 chunks
+    if (chunkNum % PUSH_ACK_BATCH === 0 || offset >= totalSize) {
+      safeSend(appWs, JSON.stringify({
+        t: 'sf2_download_progress',
+        offset,
+        size: totalSize,
+      }));
+
+      // Small delay to let ESP32 process & flush to SD
+      await sleep(PUSH_CHUNK_DELAY * 5);
+    } else {
+      await sleep(PUSH_CHUNK_DELAY);
+    }
+
+    if (chunkNum % 100 === 0) {
+      console.log(`[relay-push] ${deviceId} chunk #${chunkNum}: ${offset}/${totalSize} (buf=${devWs.bufferedAmount})`);
+    }
+  }
+
+  // Step 3: Send upload_end
+  const endMsg = JSON.stringify({ t: 'sf2_upload_end' });
+  safeSend(devWs, endMsg);
+
+  // Wait for sf2_uploaded confirmation
+  const result = await waitForDeviceMessage(devWs, deviceId, 'sf2_uploaded', 30000);
+
+  if (result) {
+    console.log(`[relay-push] Push complete: ${name} (${totalSize} bytes)`);
+    logUploadEvent({ dir: 'relay-push-done', deviceId, filename: name, size: totalSize });
+    safeSend(appWs, JSON.stringify({ t: 'sf2_downloaded', ok: true, name, size: totalSize }));
+    entry.downloaded = true;
+  } else {
+    console.log(`[relay-push] Push failed: no upload confirmation`);
+    safeSend(appWs, JSON.stringify({ t: 'sf2_push_error', msg: 'No upload confirmation from device' }));
+  }
+}
+
+// Wait for a specific message type from device (via temporary listener)
+function waitForDeviceMessage(devWs, deviceId, messageType, timeoutMs) {
+  return new Promise((resolve) => {
+    let resolved = false;
+    const timer = setTimeout(() => {
+      if (!resolved) { resolved = true; devWs.removeListener('message', handler); resolve(null); }
+    }, timeoutMs);
+
+    function handler(data, isBinary) {
+      if (isBinary) return;
+      try {
+        const msg = JSON.parse(data.toString());
+        if (msg.t === messageType) {
+          if (!resolved) { resolved = true; clearTimeout(timer); devWs.removeListener('message', handler); resolve(msg); }
+        }
+        if (msg.t === 'sf2_upload_error') {
+          if (!resolved) { resolved = true; clearTimeout(timer); devWs.removeListener('message', handler); resolve(null); }
+        }
+        // Forward to watching apps (ACKs, upload_ready, etc.)
+        const watchers = appClients.get(deviceId);
+        if (watchers) {
+          for (const appWs of watchers) { safeSend(appWs, data); }
+        }
+      } catch (_) {}
+    }
+
+    devWs.on('message', handler);
+  });
+}
+
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
 // Safe send — catches errors on dead sockets (supports text + binary)
 function safeSend(ws, data, isBinary) {
