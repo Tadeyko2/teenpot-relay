@@ -12,6 +12,7 @@
 //   app    → relay → the device
 
 const http = require('http');
+const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const { WebSocketServer } = require('ws');
@@ -47,6 +48,25 @@ const MIME_TYPES = {
 const devices = new Map();
 // deviceId → Set<ws>
 const appClients = new Map();
+
+// ============================================================
+// SF2 temporary file store (in-memory, auto-cleanup)
+// ============================================================
+// token → { buffer, filename, size, uploadedAt, downloaded }
+const sf2Store = new Map();
+const SF2_MAX_SIZE = 16 * 1024 * 1024; // 16 MB
+const SF2_EXPIRY_MS = 10 * 60 * 1000;  // 10 minutes
+
+// Cleanup expired/downloaded SF2 files every 60s
+setInterval(() => {
+  const now = Date.now();
+  for (const [token, entry] of sf2Store) {
+    if (entry.downloaded || (now - entry.uploadedAt > SF2_EXPIRY_MS)) {
+      sf2Store.delete(token);
+      console.log(`[sf2-store] Cleaned up ${entry.filename} (token=${token.slice(0,8)}..)`);
+    }
+  }
+}, 60000);
 
 // Upload event ring buffer for debugging
 const uploadLog = [];
@@ -116,6 +136,97 @@ const httpServer = http.createServer((req, res) => {
       });
     }
     res.end(JSON.stringify(list));
+    return;
+  }
+
+  // CORS preflight for SF2 endpoints
+  if (req.method === 'OPTIONS' && (pathname.startsWith('/api/sf2/'))) {
+    res.writeHead(204, {
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+      'Access-Control-Allow-Headers': 'Content-Type',
+      'Access-Control-Max-Age': '86400',
+    });
+    res.end();
+    return;
+  }
+
+  // SF2 upload: App POSTs raw bytes, gets back a download token/URL
+  if (pathname === '/api/sf2/upload' && req.method === 'POST') {
+    const urlObj = new URL(req.url, `http://${req.headers.host}`);
+    const filename = urlObj.searchParams.get('name') || 'preset.sf2';
+    const chunks = [];
+    let totalSize = 0;
+
+    req.on('data', (chunk) => {
+      totalSize += chunk.length;
+      if (totalSize > SF2_MAX_SIZE) {
+        res.writeHead(413, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
+        res.end(JSON.stringify({ ok: false, error: 'File too large (max 16MB)' }));
+        req.destroy();
+        return;
+      }
+      chunks.push(chunk);
+    });
+
+    req.on('end', () => {
+      if (res.writableEnded) return; // already sent 413
+      const buffer = Buffer.concat(chunks);
+      const token = crypto.randomBytes(16).toString('hex');
+      sf2Store.set(token, {
+        buffer,
+        filename,
+        size: buffer.length,
+        uploadedAt: Date.now(),
+        downloaded: false,
+      });
+
+      const proto = req.headers['x-forwarded-proto'] || 'https';
+      const host = req.headers.host;
+      const dlUrl = `${proto}://${host}/api/sf2/dl/${token}`;
+
+      console.log(`[sf2-store] Stored ${filename} (${buffer.length} bytes, token=${token.slice(0,8)}..)`);
+      logUploadEvent({ dir: 'sf2-store', filename, size: buffer.length, token: token.slice(0,8) });
+
+      res.writeHead(200, {
+        'Content-Type': 'application/json',
+        'Access-Control-Allow-Origin': '*',
+      });
+      res.end(JSON.stringify({ ok: true, token, url: dlUrl, size: buffer.length }));
+    });
+
+    req.on('error', (err) => {
+      console.error('[sf2-store] Upload error:', err.message);
+      if (!res.writableEnded) {
+        res.writeHead(500, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
+        res.end(JSON.stringify({ ok: false, error: err.message }));
+      }
+    });
+    return;
+  }
+
+  // SF2 download: ESP32 GETs the stored file by token
+  const dlMatch = pathname.match(/^\/api\/sf2\/dl\/([a-f0-9]{32})$/);
+  if (dlMatch && req.method === 'GET') {
+    const token = dlMatch[1];
+    const entry = sf2Store.get(token);
+    if (!entry) {
+      res.writeHead(404, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
+      res.end(JSON.stringify({ ok: false, error: 'Not found or expired' }));
+      return;
+    }
+
+    console.log(`[sf2-store] Download ${entry.filename} (${entry.size} bytes, token=${token.slice(0,8)}..)`);
+    logUploadEvent({ dir: 'sf2-download', filename: entry.filename, size: entry.size, token: token.slice(0,8) });
+
+    res.writeHead(200, {
+      'Content-Type': 'application/octet-stream',
+      'Content-Length': entry.size,
+      'Content-Disposition': `attachment; filename="${entry.filename}"`,
+      'Access-Control-Allow-Origin': '*',
+    });
+    res.end(entry.buffer);
+    entry.downloaded = true;
     return;
   }
 
