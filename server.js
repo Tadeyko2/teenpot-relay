@@ -48,6 +48,14 @@ const devices = new Map();
 // deviceId → Set<ws>
 const appClients = new Map();
 
+// Upload event ring buffer for debugging
+const uploadLog = [];
+const UPLOAD_LOG_MAX = 200;
+function logUploadEvent(evt) {
+  uploadLog.push({ ts: Date.now(), ...evt });
+  if (uploadLog.length > UPLOAD_LOG_MAX) uploadLog.shift();
+}
+
 // Create HTTP server
 const httpServer = http.createServer((req, res) => {
   const pathname = new URL(req.url, `http://${req.headers.host}`).pathname;
@@ -78,6 +86,16 @@ const httpServer = http.createServer((req, res) => {
       };
     }
     res.end(JSON.stringify(info, null, 2));
+    return;
+  }
+
+  // Upload log — ring buffer of recent SF2 upload events
+  if (pathname === '/api/upload-log') {
+    res.writeHead(200, {
+      'Content-Type': 'application/json',
+      'Access-Control-Allow-Origin': '*',
+    });
+    res.end(JSON.stringify(uploadLog, null, 2));
     return;
   }
 
@@ -213,11 +231,12 @@ function handleDeviceConnection(ws, deviceId) {
     const info = devices.get(deviceId);
     if (info) info.lastMessageAt = new Date().toISOString();
 
-    // Log SF2-related messages
+    // Log SF2-related and upload-related messages from device
     if (!isBinary) {
       const str = data.toString();
-      if (str.includes('sf2') || str.includes('system_info') || str.includes('upload')) {
-        console.log(`[dev→app] ${deviceId} text: ${str.slice(0, 200)}`);
+      if (str.includes('sf2') || str.includes('system_info') || str.includes('upload') || str.includes('ack')) {
+        console.log(`[dev→app] ${deviceId} text: ${str.slice(0, 300)}`);
+        logUploadEvent({ dir: 'dev→app', deviceId, msg: str.slice(0, 300) });
       }
     }
 
@@ -280,27 +299,36 @@ function handleAppConnection(ws, deviceId) {
       console.log(`[app→dev] ${deviceId} binary ${data.length} bytes`);
     } else {
       const str = data.toString();
-      // Log SF2 chunk sends compactly (they're frequent during upload)
       if (str.includes('"sf2_chunk"')) {
         if (!ws._chunkCount) ws._chunkCount = 0;
         ws._chunkCount++;
-        if (ws._chunkCount % 10 === 0) {
-          console.log(`[app→dev] ${deviceId} sf2_chunk #${ws._chunkCount} (${data.length} bytes)`);
+        const device = devices.get(deviceId);
+        const buffered = device ? (device.ws.bufferedAmount || 0) : -1;
+        const readyState = device ? device.ws.readyState : -1;
+        // Log EVERY chunk for upload debugging
+        logUploadEvent({
+          dir: 'app→dev', deviceId,
+          chunk: ws._chunkCount,
+          msgBytes: data.length,
+          devBuffered: buffered,
+          devReady: readyState,
+        });
+        if (ws._chunkCount <= 12 || ws._chunkCount % 10 === 0) {
+          console.log(`[app→dev] ${deviceId} sf2_chunk #${ws._chunkCount} (${data.length}B, buf=${buffered}, ready=${readyState})`);
         }
       } else {
         console.log(`[app→dev] ${deviceId} text: ${str.slice(0, 200)}`);
+        if (str.includes('sf2') || str.includes('upload')) {
+          logUploadEvent({ dir: 'app→dev', deviceId, msg: str.slice(0, 200) });
+        }
       }
     }
     const device = devices.get(deviceId);
     if (device) {
-      // Check device WS buffer pressure
-      const buffered = device.ws.bufferedAmount || 0;
-      if (buffered > 50000) {
-        console.log(`[app→dev] ${deviceId} WARNING: device ws buffered ${buffered} bytes`);
-      }
       safeSend(device.ws, data, isBinary);
     } else {
       console.log(`[app→dev] ${deviceId} DROPPED — device not connected!`);
+      logUploadEvent({ dir: 'app→dev', deviceId, error: 'device not connected' });
     }
   });
 
