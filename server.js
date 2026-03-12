@@ -50,7 +50,7 @@ const appClients = new Map();
 
 // Upload event ring buffer for debugging
 const uploadLog = [];
-const UPLOAD_LOG_MAX = 200;
+const UPLOAD_LOG_MAX = 5000;
 function logUploadEvent(evt) {
   uploadLog.push({ ts: Date.now(), ...evt });
   if (uploadLog.length > UPLOAD_LOG_MAX) uploadLog.shift();
@@ -248,8 +248,10 @@ function handleDeviceConnection(ws, deviceId) {
     }
   });
 
-  ws.on('close', () => {
-    console.log(`[device] ${deviceId} disconnected`);
+  ws.on('close', (code, reason) => {
+    const reasonStr = reason ? reason.toString() : 'none';
+    console.log(`[device] ${deviceId} disconnected code=${code} reason=${reasonStr}`);
+    logUploadEvent({ dir: 'device-close', deviceId, code, reason: reasonStr });
     // Only remove if this is still the current connection
     const current = devices.get(deviceId);
     if (current && current.ws === ws) {
@@ -268,6 +270,7 @@ function handleDeviceConnection(ws, deviceId) {
 
   ws.on('error', (err) => {
     console.error(`[device] ${deviceId} error:`, err.message);
+    logUploadEvent({ dir: 'device-error', deviceId, error: err.message });
   });
 }
 
@@ -332,8 +335,10 @@ function handleAppConnection(ws, deviceId) {
     }
   });
 
-  ws.on('close', () => {
-    console.log(`[app] disconnected from ${deviceId}`);
+  ws.on('close', (code, reason) => {
+    const reasonStr = reason ? reason.toString() : 'none';
+    console.log(`[app] disconnected from ${deviceId} code=${code} reason=${reasonStr}`);
+    logUploadEvent({ dir: 'app-close', deviceId, code, reason: reasonStr });
     const watchers = appClients.get(deviceId);
     if (watchers) {
       watchers.delete(ws);
@@ -361,7 +366,18 @@ function safeSend(ws, data, isBinary) {
 const heartbeatInterval = setInterval(() => {
   wss.clients.forEach((ws) => {
     if (ws.isAlive === false) {
-      console.log('[heartbeat] terminating dead connection');
+      // Find which device/app this belongs to
+      let who = 'unknown';
+      for (const [id, d] of devices) {
+        if (d.ws === ws) { who = `device:${id}`; break; }
+      }
+      if (who === 'unknown') {
+        for (const [id, clients] of appClients) {
+          if (clients.has(ws)) { who = `app:${id}`; break; }
+        }
+      }
+      console.log(`[heartbeat] terminating dead connection: ${who}`);
+      logUploadEvent({ dir: 'heartbeat-kill', who });
       return ws.terminate();
     }
     ws.isAlive = false;
