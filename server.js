@@ -59,6 +59,28 @@ const httpServer = http.createServer((req, res) => {
     return;
   }
 
+  // Debug: detailed device connection state
+  if (pathname === '/api/debug') {
+    res.writeHead(200, {
+      'Content-Type': 'application/json',
+      'Access-Control-Allow-Origin': '*',
+    });
+    const info = {};
+    for (const [id, d] of devices) {
+      const ws = d.ws;
+      info[id] = {
+        online: true,
+        readyState: ws.readyState,
+        bufferedAmount: ws.bufferedAmount || 0,
+        connectedAt: d.connectedAt,
+        lastMessageAt: d.lastMessageAt,
+        appCount: (appClients.get(id) || new Set()).size,
+      };
+    }
+    res.end(JSON.stringify(info, null, 2));
+    return;
+  }
+
   // REST: list online devices
   if (pathname === '/api/devices') {
     res.writeHead(200, {
@@ -257,11 +279,25 @@ function handleAppConnection(ws, deviceId) {
     if (isBinary) {
       console.log(`[app→dev] ${deviceId} binary ${data.length} bytes`);
     } else {
-      const str = data.toString().slice(0, 120);
-      console.log(`[app→dev] ${deviceId} text: ${str}`);
+      const str = data.toString();
+      // Log SF2 chunk sends compactly (they're frequent during upload)
+      if (str.includes('"sf2_chunk"')) {
+        if (!ws._chunkCount) ws._chunkCount = 0;
+        ws._chunkCount++;
+        if (ws._chunkCount % 10 === 0) {
+          console.log(`[app→dev] ${deviceId} sf2_chunk #${ws._chunkCount} (${data.length} bytes)`);
+        }
+      } else {
+        console.log(`[app→dev] ${deviceId} text: ${str.slice(0, 200)}`);
+      }
     }
     const device = devices.get(deviceId);
     if (device) {
+      // Check device WS buffer pressure
+      const buffered = device.ws.bufferedAmount || 0;
+      if (buffered > 50000) {
+        console.log(`[app→dev] ${deviceId} WARNING: device ws buffered ${buffered} bytes`);
+      }
       safeSend(device.ws, data, isBinary);
     } else {
       console.log(`[app→dev] ${deviceId} DROPPED — device not connected!`);
