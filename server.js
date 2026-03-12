@@ -228,6 +228,7 @@ function handleDeviceConnection(ws, deviceId) {
 
   // Forward device messages to all watching apps (text + binary)
   ws.on('message', (data, isBinary) => {
+    ws.isAlive = true;  // Any message = device is alive (prevents heartbeat kill)
     const info = devices.get(deviceId);
     if (info) info.lastMessageAt = new Date().toISOString();
 
@@ -298,6 +299,7 @@ function handleAppConnection(ws, deviceId) {
 
   // Forward app messages to the device (text commands + binary SF2 chunks)
   ws.on('message', (data, isBinary) => {
+    ws.isAlive = true;  // Any message = app is alive
     if (isBinary) {
       console.log(`[app→dev] ${deviceId} binary ${data.length} bytes`);
     } else {
