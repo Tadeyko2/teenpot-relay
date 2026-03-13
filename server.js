@@ -479,13 +479,13 @@ function handleAppConnection(ws, deviceId) {
 }
 
 // ============================================================
-// SF2 relay push — relay sends stored file to device as binary chunks
-// Uses ESP32's existing binary upload handler (sf2_upload_start + binary + sf2_upload_end)
+// SF2 relay push — relay sends stored file to device as base64 text chunks
+// Uses ESP32's existing text upload handler: sf2_upload_start → sf2_chunk → sf2_upload_end
 // ============================================================
 
-const PUSH_CHUNK_SIZE = 4096;  // 4KB binary chunks
-const PUSH_CHUNK_DELAY = 30;   // ms between chunks — let ESP32 process
-const PUSH_ACK_BATCH = 20;    // ESP32 sends ACK every 20 chunks
+const PUSH_CHUNK_SIZE = 4096;  // 4KB raw data per chunk (becomes ~5.5KB base64)
+const PUSH_CHUNK_DELAY = 20;   // ms between chunks — let ESP32 decode + buffer
+const PUSH_ACK_INTERVAL = 20;  // ESP32 sends sf2_ack every 20 chunks
 
 async function pushSf2ToDevice(appWs, deviceId, msg) {
   const { token, name, size } = msg;
@@ -504,15 +504,16 @@ async function pushSf2ToDevice(appWs, deviceId, msg) {
   const devWs = device.ws;
   const buffer = entry.buffer;
   const totalSize = buffer.length;
+  const totalChunks = Math.ceil(totalSize / PUSH_CHUNK_SIZE);
 
-  console.log(`[relay-push] Starting push: ${name} (${totalSize} bytes) to ${deviceId}`);
-  logUploadEvent({ dir: 'relay-push-start', deviceId, filename: name, size: totalSize });
+  console.log(`[relay-push] Starting base64 push: ${name} (${totalSize} bytes, ${totalChunks} chunks) to ${deviceId}`);
+  logUploadEvent({ dir: 'relay-push-start', deviceId, filename: name, size: totalSize, chunks: totalChunks });
 
   // Step 1: Send upload_start to device
   const startMsg = JSON.stringify({ t: 'sf2_upload_start', name, size: totalSize });
   safeSend(devWs, startMsg);
 
-  // Wait for sf2_upload_ready from device (listen on device messages)
+  // Wait for sf2_upload_ready from device
   const ready = await waitForDeviceMessage(devWs, deviceId, 'sf2_upload_ready', 15000);
   if (!ready) {
     console.log(`[relay-push] Device didn't respond with upload_ready`);
@@ -520,14 +521,14 @@ async function pushSf2ToDevice(appWs, deviceId, msg) {
     return;
   }
 
-  // Step 2: Send binary chunks
+  // Step 2: Send base64-encoded text chunks (sf2_chunk format)
   let offset = 0;
   let chunkNum = 0;
-  let lastAckOffset = 0;
 
   while (offset < totalSize) {
     const end = Math.min(offset + PUSH_CHUNK_SIZE, totalSize);
     const chunk = buffer.slice(offset, end);
+    const b64 = chunk.toString('base64');
 
     // Check device still connected
     if (devWs.readyState !== devWs.OPEN) {
@@ -536,35 +537,47 @@ async function pushSf2ToDevice(appWs, deviceId, msg) {
       return;
     }
 
-    // Check back-pressure: wait if device WS buffer > 64KB
-    while (devWs.bufferedAmount > 65536) {
+    // Back-pressure: wait if device WS buffer > 32KB
+    let bpWaits = 0;
+    while (devWs.bufferedAmount > 32768) {
       await sleep(50);
-      if (devWs.readyState !== devWs.OPEN) {
-        safeSend(appWs, JSON.stringify({ t: 'sf2_push_error', msg: 'Device disconnected (backpressure)' }));
+      bpWaits++;
+      if (bpWaits > 100 || devWs.readyState !== devWs.OPEN) {
+        safeSend(appWs, JSON.stringify({ t: 'sf2_push_error', msg: 'Device stalled (backpressure)' }));
         return;
       }
     }
 
-    safeSend(devWs, chunk, true);
+    // Send as text frame: {"t":"sf2_chunk","d":"<base64>"}
+    const chunkMsg = JSON.stringify({ t: 'sf2_chunk', d: b64 });
+    safeSend(devWs, chunkMsg);
     offset = end;
     chunkNum++;
 
-    // Report progress to app every 20 chunks
-    if (chunkNum % PUSH_ACK_BATCH === 0 || offset >= totalSize) {
+    // Every ACK interval: wait for ESP32's sf2_ack before continuing
+    if (chunkNum % PUSH_ACK_INTERVAL === 0) {
+      const ack = await waitForDeviceMessage(devWs, deviceId, 'sf2_ack', 15000);
+      if (!ack) {
+        console.log(`[relay-push] No ACK from device after chunk #${chunkNum}`);
+        safeSend(appWs, JSON.stringify({ t: 'sf2_push_error', msg: `No ACK after chunk ${chunkNum}` }));
+        return;
+      }
+
+      // Report progress to app
       safeSend(appWs, JSON.stringify({
         t: 'sf2_download_progress',
         offset,
         size: totalSize,
       }));
 
-      // Small delay to let ESP32 process & flush to SD
-      await sleep(PUSH_CHUNK_DELAY * 5);
+      // Longer pause after ACK batch — let ESP32 flush PSRAM to SD
+      await sleep(PUSH_CHUNK_DELAY * 3);
     } else {
       await sleep(PUSH_CHUNK_DELAY);
     }
 
     if (chunkNum % 100 === 0) {
-      console.log(`[relay-push] ${deviceId} chunk #${chunkNum}: ${offset}/${totalSize} (buf=${devWs.bufferedAmount})`);
+      console.log(`[relay-push] ${deviceId} chunk #${chunkNum}/${totalChunks}: ${offset}/${totalSize} (buf=${devWs.bufferedAmount})`);
     }
   }
 
@@ -576,8 +589,8 @@ async function pushSf2ToDevice(appWs, deviceId, msg) {
   const result = await waitForDeviceMessage(devWs, deviceId, 'sf2_uploaded', 30000);
 
   if (result) {
-    console.log(`[relay-push] Push complete: ${name} (${totalSize} bytes)`);
-    logUploadEvent({ dir: 'relay-push-done', deviceId, filename: name, size: totalSize });
+    console.log(`[relay-push] Push complete: ${name} (${totalSize} bytes, ${chunkNum} chunks)`);
+    logUploadEvent({ dir: 'relay-push-done', deviceId, filename: name, size: totalSize, chunks: chunkNum });
     safeSend(appWs, JSON.stringify({ t: 'sf2_downloaded', ok: true, name, size: totalSize }));
     entry.downloaded = true;
   } else {
