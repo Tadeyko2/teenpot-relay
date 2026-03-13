@@ -572,7 +572,8 @@ async function pushSf2ToDevice(appWs, deviceId, msg) {
       }));
 
       // Longer pause after ACK batch — let ESP32 flush PSRAM to SD
-      await sleep(PUSH_CHUNK_DELAY * 5);
+      // SD card needs breathing room for internal GC/wear-leveling
+      await sleep(PUSH_CHUNK_DELAY * 10);
     } else {
       await sleep(PUSH_CHUNK_DELAY);
     }
@@ -586,8 +587,8 @@ async function pushSf2ToDevice(appWs, deviceId, msg) {
   const endMsg = JSON.stringify({ t: 'sf2_upload_end' });
   safeSend(devWs, endMsg);
 
-  // Wait for sf2_uploaded confirmation
-  const result = await waitForDeviceMessage(devWs, deviceId, 'sf2_uploaded', 30000);
+  // Wait for sf2_uploaded confirmation (longer timeout for final SD flush + close)
+  const result = await waitForDeviceMessage(devWs, deviceId, 'sf2_uploaded', 60000);
 
   if (result) {
     console.log(`[relay-push] Push complete: ${name} (${totalSize} bytes, ${chunkNum} chunks)`);
