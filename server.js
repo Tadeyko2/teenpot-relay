@@ -557,7 +557,7 @@ async function pushSf2ToDevice(appWs, deviceId, msg) {
 
     // Every ACK interval: wait for ESP32's sf2_ack before continuing
     if (chunkNum % PUSH_ACK_INTERVAL === 0) {
-      const ack = await waitForDeviceMessage(devWs, deviceId, 'sf2_ack', 15000);
+      const ack = await waitForDeviceMessage(devWs, deviceId, 'sf2_ack', 30000);
       if (!ack) {
         console.log(`[relay-push] No ACK from device after chunk #${chunkNum}`);
         safeSend(appWs, JSON.stringify({ t: 'sf2_push_error', msg: `No ACK after chunk ${chunkNum}` }));
@@ -572,7 +572,7 @@ async function pushSf2ToDevice(appWs, deviceId, msg) {
       }));
 
       // Longer pause after ACK batch — let ESP32 flush PSRAM to SD
-      await sleep(PUSH_CHUNK_DELAY * 3);
+      await sleep(PUSH_CHUNK_DELAY * 5);
     } else {
       await sleep(PUSH_CHUNK_DELAY);
     }
