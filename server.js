@@ -483,7 +483,8 @@ function handleAppConnection(ws, deviceId) {
 // Uses ESP32's existing text upload handler: sf2_upload_start → sf2_chunk → sf2_upload_end
 // ============================================================
 
-const PUSH_CHUNK_SIZE = 4096;  // 4KB raw data per chunk (becomes ~5.5KB base64)
+const PUSH_CHUNK_SIZE = 1024;  // 1KB raw data per chunk (becomes ~1.4KB base64)
+                               // ESP32's WebSocketsClient over TLS silently drops frames > ~1.5KB
 const PUSH_CHUNK_DELAY = 20;   // ms between chunks — let ESP32 decode + buffer
 const PUSH_ACK_INTERVAL = 20;  // ESP32 sends sf2_ack every 20 chunks
 
