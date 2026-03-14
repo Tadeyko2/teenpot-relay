@@ -90785,7 +90785,7 @@ s=7
 return A.J(k.a.pe(0,B.eW),$async$qn)
 case 7:h=0,d=t.z
 case 8:if(!(h<e)){s=10
-break}g=h+1024>e?e:h+1024
+break}g=h+2048>e?e:h+2048
 c=l
 b=A.ajF(a2,h,g)
 if(c.d&&c.a!=null)c.a.gl3().a.E(0,b)
@@ -90793,7 +90793,7 @@ else if(c.y&&c.r!=null)c.r.gl3().a.E(0,b)
 a4.$2(g,e)
 s=11
 return A.J(A.mN(B.F9,null,d),$async$qn)
-case 11:case 9:h+=1024
+case 11:case 9:h+=2048
 s=8
 break
 case 10:l.nu(B.aQ.mR(A.as(["t","sf2_upload_end"],a0,a0),null))
