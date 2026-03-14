@@ -90112,38 +90112,40 @@ n=q.c.ah(t.g).f
 m=A.ce("\\.sf2$",!1,!1)
 n.jt(A.jm(null,null,null,B.aw,B.bA,B.Q,null,A.ax("Loading "+A.h9(p,m,"")+"...",null,null,null,null,null,null,null),null,B.d5,null,null,null,null,null,null,null,null,null,null))}}return A.K(null,r)}})
 return A.L($async$xp,r)},
-L(a){var s,r,q,p,o,n,m,l,k,j,i,h,g=this,f=null,e="JetBrainsMono",d=g.a.c
-if(!(d.d||d.y)){d=g.c
-d.toString
-s=A.V(d).ax.a===B.E
-d=g.a.c.Q!=null?B.H2:B.Hm
-d=A.dl(d,s?B.L:B.B,f,64)
-r=g.c
+L(a){var s,r,q,p,o,n,m,l,k,j,i,h,g,f=this,e=null,d="JetBrainsMono",c=f.a.c
+if(!(c.d||c.y)){c=f.c
+c.toString
+s=A.V(c).ax.a===B.E
+c=f.a.c.Q!=null?B.H2:B.Hm
+c=A.dl(c,s?B.L:B.B,e,64)
+r=f.c
 r.toString
-r=A.ax("TeenPot Not Connected",f,f,f,f,A.V(r).ok.f,f,f)
-return A.ib(new A.bm(B.Gc,A.c7(A.b([d,B.ax,r,B.bK,A.ax("Go to Settings to connect to your TeenPot device",f,f,f,f,A.aU(f,f,s?B.L:B.B,f,f,f,f,f,f,f,f,f,f,f,f,f,f,!0,f,f,f,f,f,f,f,f),B.bE,f)],t.p),B.q,B.c7,B.n),f),f,f)}d=g.c
-d.toString
-s=A.V(d).ax.a===B.E
-q=g.a.c.ax
-d=s?B.am:B.f
+r=A.ax("TeenPot Not Connected",e,e,e,e,A.V(r).ok.f,e,e)
+return A.ib(new A.bm(B.Gc,A.c7(A.b([c,B.ax,r,B.bK,A.ax("Go to Settings to connect to your TeenPot device",e,e,e,e,A.aU(e,e,s?B.L:B.B,e,e,e,e,e,e,e,e,e,e,e,e,e,e,!0,e,e,e,e,e,e,e,e),B.bE,e)],t.p),B.q,B.c7,B.n),e),e,e)}c=f.c
+c.toString
+s=A.V(c).ax.a===B.E
+q=f.a.c.ax
+c=s?B.am:B.f
 r=A.b2(16)
 p=A.cr(s?B.W:B.V,0.5)
 o=q.r
-o=A.dl(A.aE6(o),A.aOq(o),f,32)
-n=A.ax("Plant Status: "+q.gtl(),f,f,f,f,B.AQ,f,f)
+o=A.dl(A.aE6(o),A.aOq(o),e,32)
+n=A.ax("Plant Status: "+q.gtl(),e,e,e,e,B.AQ,e,e)
 m=t.p
-n=A.b([o,B.Al,A.d3(A.c7(A.b([n,B.fH,A.ax("Frequency: "+q.e+" Hz (avg "+q.f+" Hz)",f,f,f,f,A.aU(f,f,s?B.L:B.B,f,f,f,f,f,e,f,f,12,f,f,f,f,f,!0,f,f,f,f,f,f,f,f),f,f)],m),B.a9,B.o,B.n),1)],m)
-o=g.e
-if((o==null?f:o.d)!=null){o=$.aC.aN(0.15)
+n=A.b([o,B.Al,A.d3(A.c7(A.b([n,B.fH,A.ax("Frequency: "+q.e+" Hz (avg "+q.f+" Hz)",e,e,e,e,A.aU(e,e,s?B.L:B.B,e,e,e,e,e,d,e,e,12,e,e,e,e,e,!0,e,e,e,e,e,e,e,e),e,e)],m),B.a9,B.o,B.n),1)],m)
+o=f.e
+if((o==null?e:o.d)!=null){o=$.aC.aN(0.15)
 l=A.b2(8)
-k=g.e.d
+k=f.e.d
 k.toString
 j=A.ce("\\.sf2$",!1,!1)
-n.push(A.bF(f,A.ax(A.h9(k,j,""),f,f,f,f,A.aU(f,f,$.aC,f,f,f,f,f,e,f,f,10,f,f,B.Z,f,f,!0,f,f,f,f,f,f,f,f),f,f),B.m,f,new A.aZ(o,f,f,l,f,f,B.w),f,f,f,B.o5,f,f,f))}d=A.bF(f,A.bC(n,B.q,B.o,B.n,f),B.m,f,new A.aZ(d,f,p,r,f,f,B.w),f,f,f,B.bf,f,f,f)
-r=g.a7c(s)
-p=g.c
+n.push(A.bF(e,A.ax(A.h9(k,j,""),e,e,e,e,A.aU(e,e,$.aC,e,e,e,e,e,d,e,e,10,e,e,B.Z,e,e,!0,e,e,e,e,e,e,e,e),e,e),B.m,e,new A.aZ(o,e,e,l,e,e,B.w),e,e,e,B.o5,e,e,e))}c=A.bF(e,A.bC(n,B.q,B.o,B.n,e),B.m,e,new A.aZ(c,e,p,r,e,e,B.w),e,e,e,B.bf,e,e,e)
+r=f.a7c(s)
+p=f.c
 p.toString
-i=A.bL(p,f,t.w).w.a.a>600?2.8:1.4
+p=A.bL(p,e,t.w).w.a.a>700
+i=p?4:2
+h=p?1.6:1.4
 p=$.aC
 o=q.a
 n=B.c.a5(o,1)
@@ -90161,16 +90163,16 @@ k=q.c
 o=k<30
 if(o)j=B.lz
 else j=k<40?B.ly:B.iu
-h=q.d
-h=A.aHj(A.b([n,p,A.ahW(B.oO,l,"Soil Moisture",j,B.c.bp(k/100,0,1),"%",""+k),A.ahW(B.oP,$.aC,"Light",B.iu,B.c.bp(h/100,0,1),"%",""+h)],m),!0,!0,!0)
-d=A.b([d,B.ax,r,B.ax,new A.LW(new A.aiv(2,12,12,i,f),h,f,B.ag,!1,f,f,B.vt,!0,f,4,B.A,f,f,B.Q,B.aG,f),B.ax],m)
+g=q.d
+g=A.aHj(A.b([n,p,A.ahW(B.oO,l,"Soil Moisture",j,B.c.bp(k/100,0,1),"%",""+k),A.ahW(B.oP,$.aC,"Light",B.iu,B.c.bp(g/100,0,1),"%",""+g)],m),!0,!0,!0)
+c=A.b([c,B.ax,r,B.ax,new A.LW(new A.aiv(i,12,12,h,e),g,e,B.ag,!1,e,e,B.vt,!0,e,4,B.A,e,e,B.Q,B.aG,e),B.ax],m)
 if(o){r=B.a1.aN(0.1)
 p=A.b2(12)
 o=A.cr(B.a1.aN(0.3),1)
-B.b.P(d,A.b([A.bF(f,A.bC(A.b([B.HD,B.b5,A.d3(A.ax("Soil moisture is low! Your plant needs water.",f,f,f,f,A.aU(f,f,s?B.ab:B.bF,f,f,f,f,f,f,f,f,13,f,f,B.G,f,f,!0,f,f,f,f,f,f,f,f),f,f),1)],m),B.q,B.o,B.n,f),B.m,f,new A.aZ(r,f,o,p,f,f,B.w),f,f,f,B.o_,f,f,f),B.ax],m))}d.push(g.a7_(s))
-d.push(B.ax)
-d.push(g.a6W(s))
-return A.a9p(d,B.G3,B.jp,B.ag)},
+B.b.P(c,A.b([A.bF(e,A.bC(A.b([B.HD,B.b5,A.d3(A.ax("Soil moisture is low! Your plant needs water.",e,e,e,e,A.aU(e,e,s?B.ab:B.bF,e,e,e,e,e,e,e,e,13,e,e,B.G,e,e,!0,e,e,e,e,e,e,e,e),e,e),1)],m),B.q,B.o,B.n,e),B.m,e,new A.aZ(r,e,o,p,e,e,B.w),e,e,e,B.o_,e,e,e),B.ax],m))}c.push(f.a7_(s))
+c.push(B.ax)
+c.push(f.a6W(s))
+return A.a9p(c,B.G3,B.jp,B.ag)},
 a7c(a){var s=null,r=a?B.am:B.f,q=A.b2(16),p=A.cr(a?B.W:B.V,0.5),o=t.p,n=A.bC(A.b([A.dl(B.Hg,$.aC,s,18),B.b5,B.WQ],o),B.q,B.o,B.n,s),m=t.a8
 m=A.a0(new A.a5(B.If,new A.ari(this,a),m),m.i("aq.E"))
 return A.bF(s,A.c7(A.b([n,B.aX,A.bC(m,B.q,B.o,B.n,s)],o),B.a9,B.o,B.n),B.m,s,new A.aZ(r,s,p,q,s,s,B.w),s,s,s,B.bf,s,s,s)},
