@@ -88572,7 +88572,7 @@ case 11:f=a4
 if(n.c!=null){n.a1(new A.aq2(n))
 d=t.Pu
 if(f){A.eY()
-n.c.aj(d).f.l2(A.lO(null,null,null,B.aq,B.bW,B.U,null,A.ax("Uploaded "+A.k(h)+" to TeenPot",null,null,null,null,null,null,null),null,B.dL,null,null,null,null,null,null,null,null,null,null))
+n.c.aj(d).f.l2(A.lO(null,null,null,B.aq,B.bW,B.U,null,A.ax("Uploaded "+A.k(h)+" \u2014 loading on TeenPot...",null,null,null,null,null,null,null),null,B.dL,null,null,null,null,null,null,null,null,null,null))
 n.w=!1
 n.mn()}else n.c.aj(d).f.l2(A.lO(null,null,null,B.a7,B.bW,B.U,null,B.Ws,null,B.dL,null,null,null,null,null,null,null,null,null,null))}p=2
 s=8
@@ -88762,7 +88762,7 @@ A.aq_.prototype={
 $0(){return this.a.x="Generating SF2..."},
 $S:0}
 A.aq0.prototype={
-$0(){return this.a.x="Connecting to device..."},
+$0(){return this.a.x="Preparing device (pausing synth)..."},
 $S:0}
 A.aq1.prototype={
 $2(a,b){var s,r=this.a
