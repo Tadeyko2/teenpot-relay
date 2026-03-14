@@ -300,7 +300,10 @@ function handleAppConnection(ws, deviceId) {
   // Forward app messages to the device
   ws.on('message', (data, isBinary) => {
     ws.isAlive = true;  // Any message = app is alive
-    if (!isBinary) {
+    if (isBinary) {
+      console.log(`[app→dev] ${deviceId} BINARY: ${data.length} bytes`);
+      logUploadEvent({ dir: 'app→dev', deviceId, binary: true, len: data.length });
+    } else {
       const str = data.toString();
       console.log(`[app→dev] ${deviceId} text: ${str.slice(0, 200)}`);
     }
