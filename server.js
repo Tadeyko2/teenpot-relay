@@ -166,8 +166,8 @@ const httpServer = http.createServer((req, res) => {
 });
 
 // WebSocket server (noServer mode — we handle upgrade routing ourselves)
-// 64KB max payload — only JSON control messages flow through the relay
-const wss = new WebSocketServer({ noServer: true, maxPayload: 64 * 1024 });
+// 256KB max payload — JSON control messages + binary SF2 upload chunks
+const wss = new WebSocketServer({ noServer: true, maxPayload: 256 * 1024 });
 
 httpServer.on('upgrade', (request, socket, head) => {
   const pathname = new URL(request.url, `http://${request.headers.host}`).pathname;
