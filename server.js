@@ -479,13 +479,13 @@ function handleAppConnection(ws, deviceId) {
 }
 
 // ============================================================
-// SF2 relay push — relay sends stored file to device as base64 text chunks
-// Uses ESP32's existing text upload handler: sf2_upload_start → sf2_chunk → sf2_upload_end
+// SF2 relay push — relay sends stored file to device as binary WebSocket frames
+// Uses ESP32's binary message handler with PSRAM buffering for efficient SD writes.
+// Flow: sf2_upload_start (text) → binary chunks → sf2_upload_end (text)
 // ============================================================
 
-const PUSH_CHUNK_SIZE = 1024;  // 1KB raw data per chunk (becomes ~1.4KB base64)
-                               // ESP32's WebSocketsClient over TLS silently drops frames > ~1.5KB
-const PUSH_CHUNK_DELAY = 20;   // ms between chunks — let ESP32 decode + buffer
+const PUSH_CHUNK_SIZE = 4096;  // 4KB binary frames (no base64/JSON overhead)
+const PUSH_CHUNK_DELAY = 10;   // ms between chunks
 const PUSH_ACK_INTERVAL = 20;  // ESP32 sends sf2_ack every 20 chunks
 
 async function pushSf2ToDevice(appWs, deviceId, msg) {
@@ -507,10 +507,10 @@ async function pushSf2ToDevice(appWs, deviceId, msg) {
   const totalSize = buffer.length;
   const totalChunks = Math.ceil(totalSize / PUSH_CHUNK_SIZE);
 
-  console.log(`[relay-push] Starting base64 push: ${name} (${totalSize} bytes, ${totalChunks} chunks) to ${deviceId}`);
+  console.log(`[relay-push] Starting binary push: ${name} (${totalSize} bytes, ${totalChunks} chunks @ ${PUSH_CHUNK_SIZE}B) to ${deviceId}`);
   logUploadEvent({ dir: 'relay-push-start', deviceId, filename: name, size: totalSize, chunks: totalChunks });
 
-  // Step 1: Send upload_start to device
+  // Step 1: Send upload_start to device (text frame)
   const startMsg = JSON.stringify({ t: 'sf2_upload_start', name, size: totalSize });
   safeSend(devWs, startMsg);
 
@@ -522,14 +522,13 @@ async function pushSf2ToDevice(appWs, deviceId, msg) {
     return;
   }
 
-  // Step 2: Send base64-encoded text chunks (sf2_chunk format)
+  // Step 2: Send raw binary chunks (no base64, no JSON — direct binary frames)
   let offset = 0;
   let chunkNum = 0;
 
   while (offset < totalSize) {
     const end = Math.min(offset + PUSH_CHUNK_SIZE, totalSize);
     const chunk = buffer.slice(offset, end);
-    const b64 = chunk.toString('base64');
 
     // Check device still connected
     if (devWs.readyState !== devWs.OPEN) {
@@ -538,20 +537,19 @@ async function pushSf2ToDevice(appWs, deviceId, msg) {
       return;
     }
 
-    // Back-pressure: wait if device WS buffer > 32KB
+    // Back-pressure: wait if device WS buffer > 64KB
     let bpWaits = 0;
-    while (devWs.bufferedAmount > 32768) {
+    while (devWs.bufferedAmount > 65536) {
       await sleep(50);
       bpWaits++;
-      if (bpWaits > 100 || devWs.readyState !== devWs.OPEN) {
+      if (bpWaits > 200 || devWs.readyState !== devWs.OPEN) {
         safeSend(appWs, JSON.stringify({ t: 'sf2_push_error', msg: 'Device stalled (backpressure)' }));
         return;
       }
     }
 
-    // Send as text frame: {"t":"sf2_chunk","d":"<base64>"}
-    const chunkMsg = JSON.stringify({ t: 'sf2_chunk', d: b64 });
-    safeSend(devWs, chunkMsg);
+    // Send as binary frame (raw bytes, no encoding)
+    safeSend(devWs, chunk, true);
     offset = end;
     chunkNum++;
 
@@ -559,8 +557,16 @@ async function pushSf2ToDevice(appWs, deviceId, msg) {
     if (chunkNum % PUSH_ACK_INTERVAL === 0) {
       const ack = await waitForDeviceMessage(devWs, deviceId, 'sf2_ack', 30000);
       if (!ack) {
-        console.log(`[relay-push] No ACK from device after chunk #${chunkNum}`);
+        console.log(`[relay-push] No ACK from device after chunk #${chunkNum} (offset=${offset})`);
         safeSend(appWs, JSON.stringify({ t: 'sf2_push_error', msg: `No ACK after chunk ${chunkNum}` }));
+        return;
+      }
+
+      // Verify ACK offset matches what we've sent
+      const ackOffset = ack.offset || 0;
+      if (ackOffset !== offset) {
+        console.log(`[relay-push] ACK offset mismatch: expected ${offset}, got ${ackOffset}`);
+        safeSend(appWs, JSON.stringify({ t: 'sf2_push_error', msg: `Data loss detected: sent ${offset} bytes but device received ${ackOffset}` }));
         return;
       }
 
@@ -571,19 +577,18 @@ async function pushSf2ToDevice(appWs, deviceId, msg) {
         size: totalSize,
       }));
 
-      // Longer pause after ACK batch — let ESP32 flush PSRAM to SD
-      // SD card needs breathing room for internal GC/wear-leveling
-      await sleep(PUSH_CHUNK_DELAY * 10);
+      // Brief pause after ACK batch — let ESP32 flush PSRAM to SD
+      await sleep(PUSH_CHUNK_DELAY * 5);
     } else {
       await sleep(PUSH_CHUNK_DELAY);
     }
 
-    if (chunkNum % 100 === 0) {
+    if (chunkNum % 50 === 0) {
       console.log(`[relay-push] ${deviceId} chunk #${chunkNum}/${totalChunks}: ${offset}/${totalSize} (buf=${devWs.bufferedAmount})`);
     }
   }
 
-  // Step 3: Send upload_end
+  // Step 3: Send upload_end (text frame)
   const endMsg = JSON.stringify({ t: 'sf2_upload_end' });
   safeSend(devWs, endMsg);
 
@@ -591,10 +596,20 @@ async function pushSf2ToDevice(appWs, deviceId, msg) {
   const result = await waitForDeviceMessage(devWs, deviceId, 'sf2_uploaded', 60000);
 
   if (result) {
-    console.log(`[relay-push] Push complete: ${name} (${totalSize} bytes, ${chunkNum} chunks)`);
-    logUploadEvent({ dir: 'relay-push-done', deviceId, filename: name, size: totalSize, chunks: chunkNum });
-    safeSend(appWs, JSON.stringify({ t: 'sf2_downloaded', ok: true, name, size: totalSize }));
-    entry.downloaded = true;
+    const receivedSize = result.size || 0;
+    const expectedSize = result.expected || totalSize;
+    const sizeOk = result.ok && (receivedSize === totalSize);
+
+    if (sizeOk) {
+      console.log(`[relay-push] Push complete: ${name} (${totalSize} bytes, ${chunkNum} chunks)`);
+      logUploadEvent({ dir: 'relay-push-done', deviceId, filename: name, size: totalSize, chunks: chunkNum });
+      safeSend(appWs, JSON.stringify({ t: 'sf2_downloaded', ok: true, name, size: totalSize }));
+      entry.downloaded = true;
+    } else {
+      console.log(`[relay-push] Push FAILED: size mismatch — sent ${totalSize}, device received ${receivedSize}`);
+      logUploadEvent({ dir: 'relay-push-fail', deviceId, filename: name, sentSize: totalSize, receivedSize });
+      safeSend(appWs, JSON.stringify({ t: 'sf2_push_error', msg: `Size mismatch: sent ${totalSize}, received ${receivedSize}` }));
+    }
   } else {
     console.log(`[relay-push] Push failed: no upload confirmation`);
     safeSend(appWs, JSON.stringify({ t: 'sf2_push_error', msg: 'No upload confirmation from device' }));
