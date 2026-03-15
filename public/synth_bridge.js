@@ -209,6 +209,96 @@ var SynthBridge = {
     this.useWorklet = false;
   },
 
+  // === Microphone Recording ===
+  _recStream: null,
+  _recSource: null,
+  _recProcessor: null,
+  _recChunks: null,
+  _isRecording: false,
+
+  startRecording: function() {
+    var self = this;
+    if (this._isRecording) return Promise.resolve(true);
+
+    // Ensure AudioContext exists (we need its sampleRate)
+    if (!this.audioCtx) {
+      var AC = window.AudioContext || window.webkitAudioContext;
+      if (AC) this.audioCtx = new AC();
+    }
+    if (this.audioCtx && this.audioCtx.state === 'suspended') {
+      this.audioCtx.resume();
+    }
+
+    return navigator.mediaDevices.getUserMedia({ audio: true }).then(function(stream) {
+      self._recStream = stream;
+      self._recChunks = [];
+
+      // Create a separate AudioContext for recording to avoid conflicts
+      var recCtx = self.audioCtx;
+      self._recSource = recCtx.createMediaStreamSource(stream);
+
+      // ScriptProcessor for capturing raw PCM (works across all browsers)
+      self._recProcessor = recCtx.createScriptProcessor(4096, 1, 1);
+      self._recProcessor.onaudioprocess = function(e) {
+        if (!self._isRecording) return;
+        var input = e.inputBuffer.getChannelData(0);
+        // Copy the buffer (it gets reused)
+        self._recChunks.push(new Float32Array(input));
+      };
+
+      self._recSource.connect(self._recProcessor);
+      self._recProcessor.connect(recCtx.destination); // must connect to destination for onaudioprocess to fire
+      self._isRecording = true;
+      console.log('[SynthBridge] Recording started, sampleRate:', recCtx.sampleRate);
+      return true;
+    }).catch(function(e) {
+      console.error('[SynthBridge] getUserMedia error:', e);
+      return false;
+    });
+  },
+
+  stopRecording: function() {
+    if (!this._isRecording) return null;
+    this._isRecording = false;
+
+    // Disconnect and clean up
+    if (this._recProcessor) {
+      this._recProcessor.disconnect();
+      this._recProcessor = null;
+    }
+    if (this._recSource) {
+      this._recSource.disconnect();
+      this._recSource = null;
+    }
+    if (this._recStream) {
+      this._recStream.getTracks().forEach(function(t) { t.stop(); });
+      this._recStream = null;
+    }
+
+    // Flatten chunks into single Float32Array
+    if (!this._recChunks || this._recChunks.length === 0) return null;
+
+    var totalLen = 0;
+    for (var i = 0; i < this._recChunks.length; i++) {
+      totalLen += this._recChunks[i].length;
+    }
+
+    var result = new Float32Array(totalLen);
+    var offset = 0;
+    for (var i = 0; i < this._recChunks.length; i++) {
+      result.set(this._recChunks[i], offset);
+      offset += this._recChunks[i].length;
+    }
+
+    this._recChunks = null;
+    console.log('[SynthBridge] Recording stopped, samples:', totalLen);
+    return result;
+  },
+
+  isRecording: function() {
+    return this._isRecording;
+  },
+
   getSampleRate: function() {
     return this.audioCtx ? this.audioCtx.sampleRate : 44100;
   },
