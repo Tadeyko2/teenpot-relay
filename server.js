@@ -342,7 +342,7 @@ function safeSend(ws, data, isBinary) {
   } catch (_) {}
 }
 
-// Heartbeat: ping every 30s, terminate dead connections
+// Heartbeat: ping every 45s, terminate dead connections (relaxed for upload throughput)
 const heartbeatInterval = setInterval(() => {
   wss.clients.forEach((ws) => {
     if (ws.isAlive === false) {
@@ -363,7 +363,7 @@ const heartbeatInterval = setInterval(() => {
     ws.isAlive = false;
     ws.ping();
   });
-}, 30000);
+}, 45000);
 
 wss.on('close', () => {
   clearInterval(heartbeatInterval);
