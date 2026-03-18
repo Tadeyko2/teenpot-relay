@@ -229,51 +229,59 @@ var SynthBridge = {
       return Promise.resolve(false);
     }
 
-    // Ensure AudioContext exists (we need its sampleRate)
-    if (!this.audioCtx) {
-      var AC = window.AudioContext || window.webkitAudioContext;
-      if (AC) this.audioCtx = new AC();
-    }
+    console.log('[SynthBridge] startRecording: requesting mic, mobile:', this._isMobile);
 
-    // On iOS Safari, AudioContext must be in "running" state before getUserMedia
-    var resumePromise;
-    if (this.audioCtx && this.audioCtx.state === 'suspended') {
-      resumePromise = this.audioCtx.resume().catch(function() {});
-    } else {
-      resumePromise = Promise.resolve();
-    }
+    // Create a dedicated AudioContext for recording (avoids conflicts with playback context)
+    // On mobile, sharing the playback context can cause issues
+    var AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return Promise.resolve(false);
 
-    return resumePromise.then(function() {
-      return navigator.mediaDevices.getUserMedia({ audio: true });
-    }).then(function(stream) {
-      // After getUserMedia on iOS, AudioContext can suspend again — re-resume
-      if (self.audioCtx && self.audioCtx.state === 'suspended') {
-        self.audioCtx.resume().catch(function() {});
+    // First get mic permission, then set up audio processing
+    // getUserMedia must happen in user gesture context on mobile
+    return navigator.mediaDevices.getUserMedia({
+      audio: {
+        echoCancellation: false,
+        noiseSuppression: false,
+        autoGainControl: false
       }
+    }).then(function(stream) {
+      console.log('[SynthBridge] Got mic stream, tracks:', stream.getAudioTracks().length);
 
-      self._recStream = stream;
-      self._recChunks = [];
+      // Create recording context AFTER getting the stream
+      // This ensures it's in a user-gesture context on iOS
+      if (!self._recCtx || self._recCtx.state === 'closed') {
+        self._recCtx = new AC();
+      }
+      var recCtx = self._recCtx;
 
-      // Create a separate AudioContext for recording to avoid conflicts
-      var recCtx = self.audioCtx;
-      self._recSource = recCtx.createMediaStreamSource(stream);
+      // Resume the recording context (iOS requires this)
+      var resumeP = recCtx.state === 'suspended'
+        ? recCtx.resume().catch(function() {})
+        : Promise.resolve();
 
-      // ScriptProcessor for capturing raw PCM (works across all browsers)
-      self._recProcessor = recCtx.createScriptProcessor(4096, 1, 1);
-      self._recProcessor.onaudioprocess = function(e) {
-        if (!self._isRecording) return;
-        var input = e.inputBuffer.getChannelData(0);
-        // Copy the buffer (it gets reused)
-        self._recChunks.push(new Float32Array(input));
-      };
+      return resumeP.then(function() {
+        console.log('[SynthBridge] recCtx state:', recCtx.state, 'sampleRate:', recCtx.sampleRate);
 
-      self._recSource.connect(self._recProcessor);
-      self._recProcessor.connect(recCtx.destination); // must connect to destination for onaudioprocess to fire
-      self._isRecording = true;
-      console.log('[SynthBridge] Recording started, sampleRate:', recCtx.sampleRate);
-      return true;
+        self._recStream = stream;
+        self._recChunks = [];
+
+        self._recSource = recCtx.createMediaStreamSource(stream);
+
+        // ScriptProcessor for capturing raw PCM (works across all browsers including iOS Safari)
+        self._recProcessor = recCtx.createScriptProcessor(4096, 1, 1);
+        self._recProcessor.onaudioprocess = function(e) {
+          if (!self._isRecording) return;
+          var input = e.inputBuffer.getChannelData(0);
+          self._recChunks.push(new Float32Array(input));
+        };
+
+        self._recSource.connect(self._recProcessor);
+        self._recProcessor.connect(recCtx.destination);
+        self._isRecording = true;
+        console.log('[SynthBridge] Recording started, sampleRate:', recCtx.sampleRate);
+        return true;
+      });
     }).catch(function(e) {
-      // Descriptive error messages for common mobile failures
       var reason;
       if (e.name === 'NotAllowedError' || e.name === 'PermissionDeniedError') {
         reason = 'Microphone permission denied — check browser/OS settings';
@@ -306,6 +314,11 @@ var SynthBridge = {
       this._recStream.getTracks().forEach(function(t) { t.stop(); });
       this._recStream = null;
     }
+    // Close dedicated recording context
+    if (this._recCtx && this._recCtx !== this.audioCtx) {
+      this._recCtx.close().catch(function() {});
+      this._recCtx = null;
+    }
 
     // Flatten chunks into single Float32Array
     if (!this._recChunks || this._recChunks.length === 0) return null;
@@ -332,6 +345,8 @@ var SynthBridge = {
   },
 
   getSampleRate: function() {
+    // Return recording context's sample rate if available (may differ on mobile)
+    if (this._recCtx) return this._recCtx.sampleRate;
     return this.audioCtx ? this.audioCtx.sampleRate : 44100;
   },
 
