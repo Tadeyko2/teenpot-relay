@@ -95686,24 +95686,25 @@ for(n=0;n<q;++n)J.hj(o,n,B.c.aE(J.b0(p,n),-1,1))
 if(q>=128){m=q/128
 for(l=0,i=this.d;l<128;++l)i[l]=J.b0(o,B.c.aM(l*m))}j.SynthBridge.feed(o)}catch(h){k=A.am(h)
 A.bD().$1("[AudioService] feed error: "+A.k(k))}},
-xR(){var s=0,r=A.M(t.y),q,p=2,o=[],n,m,l,k
+xR(){var s=0,r=A.M(t.y),q,p=2,o=[],n,m,l,k,j
 var $async$xR=A.N(function(a,b){if(a===1){o.push(b)
 s=p}for(;;)switch(s){case 0:p=4
 s=7
 return A.E(A.fO(v.G.SynthBridge.startRecording(),t.X),$async$xR)
 case 7:n=b
-if(n!=null&&A.oW(n)){q=!0
+if(n!=null&&n!=null&&typeof n==="boolean"){l=A.oW(n)
+q=l
 s=1
-break}A.bD().$1("[AudioService] startRecording returned false")
-q=!1
+break}A.bD().$1("[AudioService] startRecording result type: "+J.U(n).k(0))
+q=n!=null
 s=1
 break
 p=2
 s=6
 break
 case 4:p=3
-k=o.pop()
-m=A.am(k)
+j=o.pop()
+m=A.am(j)
 A.bD().$1("[AudioService] startRecording error: "+A.k(m))
 q=!1
 s=1
