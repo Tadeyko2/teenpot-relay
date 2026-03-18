@@ -220,16 +220,37 @@ var SynthBridge = {
     var self = this;
     if (this._isRecording) return Promise.resolve(true);
 
+    // Check getUserMedia support
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      var msg = location.protocol === 'http:' && location.hostname !== 'localhost'
+        ? '[SynthBridge] Microphone requires HTTPS (or localhost)'
+        : '[SynthBridge] getUserMedia not supported in this browser';
+      console.error(msg);
+      return Promise.resolve(false);
+    }
+
     // Ensure AudioContext exists (we need its sampleRate)
     if (!this.audioCtx) {
       var AC = window.AudioContext || window.webkitAudioContext;
       if (AC) this.audioCtx = new AC();
     }
+
+    // On iOS Safari, AudioContext must be in "running" state before getUserMedia
+    var resumePromise;
     if (this.audioCtx && this.audioCtx.state === 'suspended') {
-      this.audioCtx.resume();
+      resumePromise = this.audioCtx.resume().catch(function() {});
+    } else {
+      resumePromise = Promise.resolve();
     }
 
-    return navigator.mediaDevices.getUserMedia({ audio: true }).then(function(stream) {
+    return resumePromise.then(function() {
+      return navigator.mediaDevices.getUserMedia({ audio: true });
+    }).then(function(stream) {
+      // After getUserMedia on iOS, AudioContext can suspend again — re-resume
+      if (self.audioCtx && self.audioCtx.state === 'suspended') {
+        self.audioCtx.resume().catch(function() {});
+      }
+
       self._recStream = stream;
       self._recChunks = [];
 
@@ -252,7 +273,18 @@ var SynthBridge = {
       console.log('[SynthBridge] Recording started, sampleRate:', recCtx.sampleRate);
       return true;
     }).catch(function(e) {
-      console.error('[SynthBridge] getUserMedia error:', e);
+      // Descriptive error messages for common mobile failures
+      var reason;
+      if (e.name === 'NotAllowedError' || e.name === 'PermissionDeniedError') {
+        reason = 'Microphone permission denied — check browser/OS settings';
+      } else if (e.name === 'NotFoundError' || e.name === 'DevicesNotFoundError') {
+        reason = 'No microphone found on this device';
+      } else if (e.name === 'NotSupportedError' || e.name === 'NotReadableError') {
+        reason = 'Microphone not available (may be in use by another app)';
+      } else {
+        reason = e.message || e.name || 'unknown error';
+      }
+      console.error('[SynthBridge] Recording failed:', reason, '(' + e.name + ')');
       return false;
     });
   },
