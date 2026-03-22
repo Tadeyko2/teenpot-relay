@@ -1,11 +1,11 @@
 {
-    "name": "teen_commander",
-    "short_name": "teen_commander",
+    "name": "T1N-APP",
+    "short_name": "T1N-APP",
     "start_url": ".",
     "display": "standalone",
     "background_color": "#0175C2",
     "theme_color": "#0175C2",
-    "description": "A new Flutter project.",
+    "description": "T1N-APP - Plant Music Synthesizer",
     "orientation": "portrait-primary",
     "prefer_related_applications": false,
     "icons": [
