@@ -1,11 +1,11 @@
 {
-    "name": "T1N-APP",
-    "short_name": "T1N-APP",
+    "name": "T1N-4PP",
+    "short_name": "T1N-4PP",
     "start_url": ".",
     "display": "standalone",
     "background_color": "#0175C2",
     "theme_color": "#0175C2",
-    "description": "T1N-APP - Plant Music Synthesizer",
+    "description": "T1N-4PP - Plant Music Synthesizer",
     "orientation": "portrait-primary",
     "prefer_related_applications": false,
     "icons": [
