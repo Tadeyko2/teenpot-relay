@@ -102573,7 +102573,9 @@ a2+=q.a===B.mc&&q.c>0?b2*(1-a1*q.c*0.5):b2}b7=Math.abs(a2)
 e=b9.RG
 b8=b7>e?0.01:0.001
 b9.RG=e+b8*(b7-e)
-c0[g]=B.c.aE(b9.aqp(b9.abp(b9.abi(b9.abh(b9.abf(b9.abk(b9.abg(b9.abn(b9.abj(b9.abr(a2)))))))))*0.7),-0.891,0.891)*s.as}B.b.dh(r,new A.ar1())
+a2=B.c.aE(b9.aqp(b9.abp(b9.abi(b9.abh(b9.abf(b9.abk(b9.abg(b9.abn(b9.abj(b9.abr(a2)))))))))*0.7),-0.891,0.891)
+e=s.as
+c0[g]=a2*(e*e)}B.b.dh(r,new A.ar1())
 b9.as3(c0)
 return c0},
 aoy(b0,b1,b2,b3,b4){var s,r,q,p,o,n,m,l,k,j,i,h,g,f,e,d,c,b,a,a0,a1,a2,a3,a4,a5,a6,a7,a8,a9=this
