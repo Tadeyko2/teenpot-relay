@@ -67,8 +67,11 @@ const httpServer = http.createServer((req, res) => {
     return;
   }
 
-  // Debug: detailed device connection state
+  // Debug: detailed device connection state (requires DEBUG_TOKEN env var)
   if (pathname === '/api/debug') {
+    const token = process.env.DEBUG_TOKEN;
+    const provided = new URL(req.url, `http://${req.headers.host}`).searchParams.get('token');
+    if (token && provided !== token) { res.writeHead(403); res.end('Forbidden'); return; }
     res.writeHead(200, {
       'Content-Type': 'application/json',
       'Access-Control-Allow-Origin': '*',
@@ -89,8 +92,11 @@ const httpServer = http.createServer((req, res) => {
     return;
   }
 
-  // Upload log — ring buffer of recent SF2 upload events
+  // Upload log — ring buffer of recent SF2 upload events (requires DEBUG_TOKEN env var)
   if (pathname === '/api/upload-log') {
+    const token = process.env.DEBUG_TOKEN;
+    const provided = new URL(req.url, `http://${req.headers.host}`).searchParams.get('token');
+    if (token && provided !== token) { res.writeHead(403); res.end('Forbidden'); return; }
     res.writeHead(200, {
       'Content-Type': 'application/json',
       'Access-Control-Allow-Origin': '*',
@@ -120,14 +126,14 @@ const httpServer = http.createServer((req, res) => {
   }
 
   // Static files — serve Flutter web build
-  let urlPath = new URL(req.url, `http://${req.headers.host}`).pathname;
+  let urlPath = pathname;
   if (urlPath === '/') urlPath = '/index.html';
 
   const filePath = path.join(STATIC_DIR, urlPath);
   const ext = path.extname(filePath).toLowerCase();
 
-  // Security: no path traversal
-  if (!filePath.startsWith(STATIC_DIR)) {
+  // Security: no path traversal (trailing sep prevents prefix confusion)
+  if (!filePath.startsWith(STATIC_DIR + path.sep) && filePath !== STATIC_DIR) {
     res.writeHead(403);
     res.end('Forbidden');
     return;
@@ -173,18 +179,20 @@ httpServer.on('upgrade', (request, socket, head) => {
   const pathname = new URL(request.url, `http://${request.headers.host}`).pathname;
   const parts = pathname.split('/').filter(Boolean);
 
-  // /device/{deviceId}
+  // /device/{deviceId} — validate device ID format
   if (parts.length === 2 && parts[0] === 'device') {
-    const deviceId = parts[1].toUpperCase();
+    const deviceId = parts[1].toUpperCase().replace(/[^A-F0-9]/g, '').slice(0, 12);
+    if (!deviceId) { socket.write('HTTP/1.1 400 Bad Request\r\n\r\n'); socket.destroy(); return; }
     wss.handleUpgrade(request, socket, head, (ws) => {
       handleDeviceConnection(ws, deviceId);
     });
     return;
   }
 
-  // /app/{deviceId}
+  // /app/{deviceId} — validate device ID format
   if (parts.length === 2 && parts[0] === 'app') {
-    const deviceId = parts[1].toUpperCase();
+    const deviceId = parts[1].toUpperCase().replace(/[^A-F0-9]/g, '').slice(0, 12);
+    if (!deviceId) { socket.write('HTTP/1.1 400 Bad Request\r\n\r\n'); socket.destroy(); return; }
     wss.handleUpgrade(request, socket, head, (ws) => {
       handleAppConnection(ws, deviceId);
     });
@@ -367,6 +375,15 @@ const heartbeatInterval = setInterval(() => {
 
 wss.on('close', () => {
   clearInterval(heartbeatInterval);
+});
+
+// Graceful shutdown
+process.on('SIGTERM', () => {
+  console.log('[relay] SIGTERM received, shutting down...');
+  clearInterval(heartbeatInterval);
+  wss.close(() => {
+    httpServer.close(() => process.exit(0));
+  });
 });
 
 // Start server
